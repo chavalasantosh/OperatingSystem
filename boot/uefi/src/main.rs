@@ -218,7 +218,7 @@ struct MemoryMapSnapshot {
 }
 
 #[unsafe(no_mangle)]
-pub extern "efiapi" fn efi_main(
+extern "efiapi" fn efi_main(
     image_handle: EfiHandle,
     system_table: *mut EfiSystemTable,
 ) -> EfiStatus {
@@ -320,7 +320,7 @@ fn exit_firmware(
 }
 
 fn capture_memory_map(get_memory_map: GetMemoryMap) -> Result<MemoryMapSnapshot, EfiStatus> {
-    let buffer = addr_of_mut!(MEMORY_MAP_STORAGE).cast::<u8>();
+    let buffer = addr_of_mut!(MEMORY_MAP_STORAGE).cast::<EfiMemoryDescriptor>();
     let mut map_size = MEMORY_MAP_CAPACITY;
     let mut map_key = 0;
     let mut descriptor_size = 0;
@@ -331,11 +331,11 @@ fn capture_memory_map(get_memory_map: GetMemoryMap) -> Result<MemoryMapSnapshot,
     // local variables for the duration of the firmware call.
     let status = unsafe {
         get_memory_map(
-            &mut map_size,
-            buffer.cast::<EfiMemoryDescriptor>(),
-            &mut map_key,
-            &mut descriptor_size,
-            &mut descriptor_version,
+            &raw mut map_size,
+            buffer,
+            &raw mut map_key,
+            &raw mut descriptor_size,
+            &raw mut descriptor_version,
         )
     };
 

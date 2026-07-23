@@ -44,7 +44,7 @@ def main() -> int:
     kernel = KERNEL.read_text(encoding="utf-8")
     smoke = SMOKE.read_text(encoding="utf-8")
 
-    require(boot, 'pub extern "efiapi" fn efi_main', BOOT)
+    require(boot, 'extern "efiapi" fn efi_main', BOOT)
     require(boot, "get_memory_map", BOOT)
     require(boot, "exit_boot_services", BOOT)
     require(boot, "EXIT_BOOT_SERVICES_RETRIES", BOOT)

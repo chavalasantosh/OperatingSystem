@@ -9,8 +9,8 @@ command -v qemu-system-x86_64 >/dev/null 2>&1 || {
   exit 1
 }
 
-./scripts/build-smoke.sh
-OVMF=$(./scripts/find-ovmf.sh)
+bash ./scripts/build-smoke.sh
+OVMF=$(bash ./scripts/find-ovmf.sh)
 mkdir -p build
 rm -f build/qemu-debug.log
 

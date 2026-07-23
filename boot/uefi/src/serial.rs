@@ -34,7 +34,7 @@ impl SerialConsole {
         Self
     }
 
-    fn write_raw(&mut self, byte: u8) {
+    fn write_raw(byte: u8) {
         // Bound the polling loop so missing physical serial hardware cannot
         // deadlock the boot path. QEMU normally becomes ready immediately.
         for _ in 0..100_000 {
@@ -54,7 +54,7 @@ impl SerialConsole {
 
 impl Console for SerialConsole {
     fn write_byte(&mut self, byte: u8) {
-        self.write_raw(byte);
+        Self::write_raw(byte);
     }
 }
 
