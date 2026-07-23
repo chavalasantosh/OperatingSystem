@@ -159,7 +159,11 @@ mod tests {
 
         assert!(console.output.contains("SanjuOS\r\n"));
         assert!(console.output.contains("Architecture: x86_64\r\n"));
-        assert!(console.output.contains("Firmware boot services: exited\r\n"));
+        assert!(
+            console
+                .output
+                .contains("Firmware boot services: exited\r\n")
+        );
         assert!(console.output.contains("Memory descriptors: 100\r\n"));
         assert!(console.output.contains("Kernel ownership gate: passed\r\n"));
     }
@@ -185,9 +189,6 @@ mod tests {
         console.write_byte(b' ');
         console.write_usize(12_345);
 
-        assert_eq!(
-            console.output,
-            "ready\r\n0 12345"
-        );
+        assert_eq!(console.output, "ready\r\n0 12345");
     }
 }

@@ -256,11 +256,7 @@ pub extern "efiapi" fn efi_main(
     let get_memory_map = boot_services.get_memory_map;
     let exit_boot_services = boot_services.exit_boot_services;
 
-    let snapshot = match exit_firmware(
-        image_handle,
-        get_memory_map,
-        exit_boot_services,
-    ) {
+    let snapshot = match exit_firmware(image_handle, get_memory_map, exit_boot_services) {
         Ok(snapshot) => snapshot,
         Err(status) => {
             pre_exit.write_line("FATAL: firmware ownership transition failed.");

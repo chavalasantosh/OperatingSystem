@@ -41,4 +41,4 @@ jobs:
       - name: Install emulator
         run: sudo apt-get update && sudo apt-get install -y qemu-system-x86 ovmf
       - name: Boot in QEMU
-        run: ./scripts/smoke-test.sh
+        run: bash ./scripts/smoke-test.sh
