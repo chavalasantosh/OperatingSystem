@@ -30,7 +30,7 @@ qemu-system-x86_64 \
   -cpu max \
   -m 256M \
   -drive if=pflash,format=raw,readonly=on,file="$OVMF_CODE" \
-  -drive if=pflash,format=raw,file="$OVMF_VARS_COPY" \ \
+  -drive if=pflash,format=raw,file="$OVMF_VARS_COPY" \
   -drive format=raw,file=fat:rw:build/smoke-esp \
   -display none \
   -serial none \
