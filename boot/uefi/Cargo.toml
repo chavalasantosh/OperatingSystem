@@ -1,0 +1,20 @@
+[package]
+name = "sanju-boot"
+version = "0.0.1"
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[[bin]]
+name = "sanju-boot"
+path = "src/main.rs"
+
+[features]
+default = []
+qemu-test = []
+
+[dependencies]
+sanju_kernel = { package = "sanju-kernel", path = "../../kernel" }
+
+[lints]
+workspace = true

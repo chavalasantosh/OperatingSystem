@@ -1,0 +1,3 @@
+[alias]
+build-uefi = "build --locked --release --package sanju-boot --target x86_64-unknown-uefi"
+test-kernel = "test --locked --package sanju-kernel"
