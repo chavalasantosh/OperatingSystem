@@ -1,10 +1,17 @@
 #![cfg_attr(not(test), no_std)]
+#![allow(clippy::pedantic)]
 
+pub mod elf;
 pub mod fs;
+pub mod heap;
 pub mod input;
 pub mod memory;
+pub mod paging;
+pub mod process;
 pub mod scheduler;
 pub mod shell;
+pub mod startup;
+pub mod syscall;
 
 /// Minimal output boundary used before the full device and logging stacks exist.
 pub trait Console {
@@ -231,10 +238,153 @@ pub fn kernel_main(console: &mut dyn Console, boot_info: BootInfo, report: M4Rep
 
     if report.gate_passed() {
         console.write_line("M4 interactive runtime gate: passed");
-        console
-            .write_line("Next gate: paging ownership, user mode, syscalls, and executable loading");
+        console.write_line(
+            "Next gate: paging ownership, user mode, syscalls, and executable loading",
+        );
     } else {
         console.write_line("M4 interactive runtime gate: failed");
+    }
+}
+
+/// Runtime evidence produced by the M5 protected-userspace batch.
+#[allow(clippy::struct_excessive_bools)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct M5Report {
+    pub paging_ownership_active: bool,
+    pub active_page_table_root: u64,
+    pub four_level_paging_active: bool,
+    pub mapping_api_active: bool,
+    pub page_flags_active: bool,
+    pub boot_memory_reclaim_active: bool,
+    pub guard_pages_active: bool,
+    pub write_xor_execute_active: bool,
+    pub kernel_heap_active: bool,
+    pub heap_allocations: usize,
+    pub heap_frees: usize,
+    pub page_fault_diagnostics_active: bool,
+    pub user_gdt_active: bool,
+    pub ring3_execution_active: bool,
+    pub user_address_space_isolation_active: bool,
+    pub user_stacks_active: bool,
+    pub process_control_blocks_active: bool,
+    pub context_switching_active: bool,
+    pub preemptive_scheduling_active: bool,
+    pub syscall_interface_active: bool,
+    pub safe_user_memory_active: bool,
+    pub elf64_loader_active: bool,
+    pub user_programs_launched: usize,
+    pub user_processes_exited: usize,
+    pub user_fault_isolation_passed: bool,
+    pub startup_experience_active: bool,
+    pub sanjuos_brand_printed: bool,
+}
+
+impl M5Report {
+    #[must_use]
+    pub const fn gate_passed(self) -> bool {
+        self.paging_ownership_active
+            && self.active_page_table_root != 0
+            && self.four_level_paging_active
+            && self.mapping_api_active
+            && self.page_flags_active
+            && self.boot_memory_reclaim_active
+            && self.guard_pages_active
+            && self.write_xor_execute_active
+            && self.kernel_heap_active
+            && self.heap_allocations > 0
+            && self.heap_frees > 0
+            && self.page_fault_diagnostics_active
+            && self.user_gdt_active
+            && self.ring3_execution_active
+            && self.user_address_space_isolation_active
+            && self.user_stacks_active
+            && self.process_control_blocks_active
+            && self.context_switching_active
+            && self.preemptive_scheduling_active
+            && self.syscall_interface_active
+            && self.safe_user_memory_active
+            && self.elf64_loader_active
+            && self.user_programs_launched >= 3
+            && self.user_processes_exited >= 2
+            && self.user_fault_isolation_passed
+            && self.startup_experience_active
+            && self.sanjuos_brand_printed
+    }
+}
+
+/// Prints the M5 protected-userspace acceptance report.
+#[allow(clippy::too_many_lines)]
+pub fn kernel_main_m5(console: &mut dyn Console, boot_info: BootInfo, report: M5Report) {
+    startup::print_logo(console);
+    console.write_line("SanjuOS M5");
+    console.write_line(boot_info.milestone);
+    console.write_str("Architecture: ");
+    console.write_line(boot_info.architecture);
+    console.write_str("Firmware: ");
+    console.write_line(boot_info.firmware);
+    write_state(console, "Paging ownership", report.paging_ownership_active);
+    console.write_str("Active page-table root: 0x");
+    write_hex_u64(console, report.active_page_table_root);
+    console.write_line("");
+    write_state(console, "Four-level page-table manager", report.four_level_paging_active);
+    write_state(console, "Page map/unmap API", report.mapping_api_active);
+    write_state(console, "Page protection flags", report.page_flags_active);
+    write_state(console, "Boot-service memory reclaim", report.boot_memory_reclaim_active);
+    write_state(console, "Guard pages", report.guard_pages_active);
+    write_state(console, "W^X memory security", report.write_xor_execute_active);
+    write_state(console, "Kernel heap", report.kernel_heap_active);
+    console.write_str("Kernel heap allocations/frees: ");
+    console.write_usize(report.heap_allocations);
+    console.write_str("/");
+    console.write_usize(report.heap_frees);
+    console.write_line("");
+    write_state(console, "Enhanced page-fault diagnostics", report.page_fault_diagnostics_active);
+    write_state(console, "User-mode GDT segments", report.user_gdt_active);
+    write_state(console, "Ring 3 execution", report.ring3_execution_active);
+    write_state(
+        console,
+        "User address-space isolation",
+        report.user_address_space_isolation_active,
+    );
+    write_state(console, "Guarded user stacks", report.user_stacks_active);
+    write_state(console, "Process control blocks", report.process_control_blocks_active);
+    write_state(console, "Real CPU context model", report.context_switching_active);
+    write_state(console, "Preemptive scheduling", report.preemptive_scheduling_active);
+    write_state(console, "System-call interface", report.syscall_interface_active);
+    write_state(console, "Safe user-memory access", report.safe_user_memory_active);
+    write_state(console, "ELF64 loader", report.elf64_loader_active);
+    console.write_str("User processes launched: ");
+    console.write_usize(report.user_programs_launched);
+    console.write_line("");
+    console.write_str("User processes exited: ");
+    console.write_usize(report.user_processes_exited);
+    console.write_line("");
+    if report.user_fault_isolation_passed {
+        console.write_line("User fault isolation: passed");
+    } else {
+        console.write_line("User fault isolation: failed");
+    }
+    write_state(console, "Branded startup experience", report.startup_experience_active);
+    write_state(console, "SanjuOS logo print", report.sanjuos_brand_printed);
+
+    if report.gate_passed() {
+        console.write_line("M5 protected user-space gate: passed");
+        console.write_line(
+            "Next gate: storage drivers, persistent filesystem, and graphics compositor",
+        );
+    } else {
+        console.write_line("M5 protected user-space gate: failed");
+    }
+}
+
+fn write_hex_u64(console: &mut dyn Console, value: u64) {
+    for shift in (0..16).rev() {
+        let nibble = u8::try_from((value >> (shift * 4)) & 0x0f).unwrap_or(0);
+        console.write_byte(if nibble < 10 {
+            b'0' + nibble
+        } else {
+            b'a' + nibble - 10
+        });
     }
 }
 
@@ -249,7 +399,9 @@ fn write_state(console: &mut dyn Console, label: &str, active: bool) {
 
 #[cfg(test)]
 mod tests {
-    use super::{BootInfo, Console, M4Report, MemoryMapInfo, kernel_main};
+    use super::{
+        BootInfo, Console, M4Report, M5Report, MemoryMapInfo, kernel_main, kernel_main_m5,
+    };
     use std::string::String;
 
     #[derive(Default)]
@@ -301,6 +453,69 @@ mod tests {
             ramfs_active: true,
             ramfs_files: 2,
         }
+    }
+
+    const fn sample_m5_report() -> M5Report {
+        M5Report {
+            paging_ownership_active: true,
+            active_page_table_root: 0x1000,
+            four_level_paging_active: true,
+            mapping_api_active: true,
+            page_flags_active: true,
+            boot_memory_reclaim_active: true,
+            guard_pages_active: true,
+            write_xor_execute_active: true,
+            kernel_heap_active: true,
+            heap_allocations: 3,
+            heap_frees: 1,
+            page_fault_diagnostics_active: true,
+            user_gdt_active: true,
+            ring3_execution_active: true,
+            user_address_space_isolation_active: true,
+            user_stacks_active: true,
+            process_control_blocks_active: true,
+            context_switching_active: true,
+            preemptive_scheduling_active: true,
+            syscall_interface_active: true,
+            safe_user_memory_active: true,
+            elf64_loader_active: true,
+            user_programs_launched: 3,
+            user_processes_exited: 2,
+            user_fault_isolation_passed: true,
+            startup_experience_active: true,
+            sanjuos_brand_printed: true,
+        }
+    }
+
+    #[test]
+    fn m5_banner_confirms_protected_userspace_gate() {
+        let mut console = RecordingConsole::default();
+        let info = BootInfo::new(
+            "x86_64",
+            "UEFI",
+            "Milestone M5: protected user-space foundation and branded startup.",
+            sample_map(),
+        );
+        kernel_main_m5(&mut console, info, sample_m5_report());
+        assert!(console.output.contains("SanjuOS M5\r\n"));
+        assert!(console.output.contains("Paging ownership: active\r\n"));
+        assert!(console.output.contains("Ring 3 execution: active\r\n"));
+        assert!(console.output.contains("System-call interface: active\r\n"));
+        assert!(console.output.contains("ELF64 loader: active\r\n"));
+        assert!(console.output.contains("User processes launched: 3\r\n"));
+        assert!(
+            console
+                .output
+                .contains("M5 protected user-space gate: passed\r\n")
+        );
+    }
+
+    #[test]
+    fn m5_gate_rejects_missing_fault_isolation() {
+        assert!(sample_m5_report().gate_passed());
+        let mut failed = sample_m5_report();
+        failed.user_fault_isolation_passed = false;
+        assert!(!failed.gate_passed());
     }
 
     #[test]

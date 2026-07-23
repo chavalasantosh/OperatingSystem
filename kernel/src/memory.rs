@@ -6,6 +6,8 @@ use core::ptr::NonNull;
 use crate::MemoryMapInfo;
 
 pub const PAGE_SIZE: u64 = 4096;
+const EFI_BOOT_SERVICES_CODE: u32 = 3;
+const EFI_BOOT_SERVICES_DATA: u32 = 4;
 const EFI_CONVENTIONAL_MEMORY: u32 = 7;
 
 /// A 4 KiB-aligned physical frame returned by the early frame allocator.
@@ -15,6 +17,25 @@ pub struct PhysicalFrame {
 }
 
 impl PhysicalFrame {
+    /// Creates a physical frame from a page-aligned address.
+    #[must_use]
+    pub const fn from_start_address(start_address: u64) -> Option<Self> {
+        if start_address.is_multiple_of(PAGE_SIZE) {
+            Some(Self { start_address })
+        } else {
+            None
+        }
+    }
+
+    /// Creates a frame without validating alignment.
+    ///
+    /// This is restricted to internal constant initialization where the caller
+    /// supplies either zero or a known page-aligned value.
+    #[must_use]
+    pub(crate) const fn from_start_address_unchecked(start_address: u64) -> Self {
+        Self { start_address }
+    }
+
     /// Returns the physical start address of this frame.
     #[must_use]
     pub const fn start_address(self) -> u64 {
@@ -102,6 +123,27 @@ impl FrameAllocator {
     #[must_use]
     pub const fn allocated_frames(&self) -> u64 {
         self.allocated_frames
+    }
+
+    /// Counts boot-service frames that become reclaimable after
+    /// `ExitBootServices`. These frames are reported separately and are not
+    /// allocated until permanent kernel/image reservations are installed.
+    #[must_use]
+    pub fn reclaimable_boot_service_frames(&self) -> u64 {
+        let mut frames = 0_u64;
+        for descriptor_index in 0..self.map.descriptor_count {
+            // SAFETY: `Self` exists only after memory-map validation.
+            let Ok(descriptor) = (unsafe { read_descriptor(self.map, descriptor_index) }) else {
+                continue;
+            };
+            if matches!(
+                descriptor.memory_type,
+                EFI_BOOT_SERVICES_CODE | EFI_BOOT_SERVICES_DATA
+            ) {
+                frames = frames.saturating_add(descriptor.number_of_pages);
+            }
+        }
+        frames
     }
 
     /// Allocates the next available 4 KiB physical frame.

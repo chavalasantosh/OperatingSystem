@@ -53,3 +53,14 @@ The initial kernel is a modular monolithic kernel: essential mechanisms execute 
 - First firmware: UEFI.
 - Second architecture candidate: AArch64 after the x86-64 platform abstraction is stable.
 - First physical target: one laptop selected after an inventory and documentation review.
+
+## M5 protected-user execution path
+
+```text
+UEFI -> retained memory map -> ExitBootServices -> kernel stack
+     -> GDT/TSS/IDT/PIC/PIT -> CR3 capture -> syscall MSRs
+     -> ELF64 loader -> Ring 3 IRETQ -> syscalls / user faults
+     -> kernel acceptance report -> interactive shell
+```
+
+The M5 platform path runs one user program at a time on the bootstrap CPU. The architecture-independent process and paging objects define the intended long-term contract. M6 replaces firmware-derived shared mappings with activated process-owned page tables and complete preemptive contexts.

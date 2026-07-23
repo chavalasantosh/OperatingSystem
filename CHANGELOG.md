@@ -1,5 +1,25 @@
 # Changelog
 
+## M5-alpha protected userspace and startup — 2026-07-24
+
+### Added
+
+- Active CR3 capture, virtual-memory layout, map/unmap policy, page flags, W^X checks, reclaim accounting, and guarded-stack descriptors.
+- Reusable first-fit kernel heap with deallocation and region merging.
+- Ring 3 GDT entries, controlled `IRETQ` entry, `SYSCALL`/`SYSRET`, user-pointer validation, and user-fault recovery.
+- Process control blocks, address-space/context models, and timer-quantum preemption evidence.
+- Allocation-free ELF64 PIE loader and reproducible `init`, `hello`, and `fault-test` programs.
+- Branded startup stages, stable failure codes, SanjuOS ASCII output, and approved PNG logo asset.
+- One combined source, host-test, Clippy, UEFI-build, and QEMU acceptance flow.
+
+### Boundary
+
+M5 is a protected-userspace foundation, not the final security architecture. Private activated process page tables, hardware guard holes, and full process register switching remain M6 work.
+
+### Safety status
+
+Emulator-only. Physical installation remains unsupported.
+
 ## M4-alpha combined runtime implementation — 2026-07-24
 
 ### Added
