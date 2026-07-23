@@ -1,5 +1,25 @@
 # Changelog
 
+## M2-alpha implementation — 2026-07-24
+
+### Added
+
+- Dedicated 64 KiB kernel stack and one-way post-firmware stack transition.
+- x86-64 GDT, TSS, ring-0 stack, and double-fault IST stack.
+- IDT handlers for breakpoint, double fault, general protection, and page fault.
+- Recoverable breakpoint exception self-test and fatal CR2 diagnostics.
+- Physical frame allocator restricted to UEFI conventional memory.
+- 256 KiB allocation-only bootstrap heap.
+- M2 host tests, ABI checks, timeout-protected QEMU gate, ADR, and Sprint 2 plan.
+
+### Verification status
+
+M1 is QEMU-verified. M2 source checks pass locally; Rust formatting, Clippy, unit tests, UEFI build, and QEMU execution must pass in CI before M2 is accepted.
+
+### Safety status
+
+Emulator-only. Physical installation remains unsupported.
+
 ## M1-alpha checkpoint — 2026-07-21
 
 ### Added

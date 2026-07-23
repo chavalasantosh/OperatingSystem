@@ -1,48 +1,44 @@
 # Product Backlog
 
-## M0 — Boot Foundation
+## M0 — Boot Foundation — accepted
 
-- S0-001 Repository and Rust workspace — implemented, verification pending.
-- S0-002 UEFI firmware adapter — implemented, verification pending.
-- S0-003 Freestanding kernel-core boundary — implemented, verification pending.
-- S0-004 QEMU smoke test — implemented, verification pending.
-- S0-005 CI and quality policy — implemented, verification pending.
+- Repository, Rust workspace, UEFI adapter, freestanding kernel boundary, CI, and QEMU automation.
 
-## M1 — Firmware Exit and Kernel Ownership
+## M1 — Firmware Exit and Kernel Ownership — accepted
 
-- M1-001 Model UEFI boot services required for memory-map retrieval — implemented, compiler verification pending.
-- M1-002 Capture and validate the firmware memory map — implemented, emulator verification pending.
-- M1-003 Allocate a dedicated kernel stack — not started.
-- M1-004 Introduce an owned boot-information ABI — implemented, compiler verification pending.
-- M1-005 Call `ExitBootServices` with retry-safe map-key handling — implemented, emulator verification pending.
-- M1-006 Replace firmware console dependence with an early serial logger — implemented for QEMU COM1.
-- M1-007 Add fatal-error diagnostics and deterministic QEMU exit behavior — implemented, emulator verification pending.
-- M1-008 Test malformed and changing memory-map scenarios — partial host validation; controlled firmware retry test pending.
+- UEFI memory-map capture and validation.
+- Retry-safe `ExitBootServices`.
+- Owned boot-information ABI.
+- Firmware-independent serial/debug logging.
+- Deterministic QEMU smoke exit.
 
-## M2 — CPU and Exceptions
+## M2 — Protected Core Kernel — implemented; CI acceptance pending
 
-- M2-001 Architecture module boundary.
-- M2-002 GDT and TSS.
-- M2-003 IDT and exception stubs.
-- M2-004 Page-fault diagnostics.
-- M2-005 Local APIC timer investigation.
-- M2-006 Double-fault stack and test.
+- M2-001 Dedicated kernel stack and one-way stack transition.
+- M2-002 Long-mode GDT and TSS.
+- M2-003 Double-fault IST stack.
+- M2-004 IDT and breakpoint self-test.
+- M2-005 General-protection and page-fault diagnostics.
+- M2-006 Physical frame allocator over conventional memory.
+- M2-007 Bootstrap bump heap.
+- M2-008 Host tests and deterministic QEMU assertions.
 
-## M3 — Memory Management
+## M3 — Interrupts, Scheduling, and Shell
 
-- M3-001 Physical-frame allocator.
-- M3-002 Virtual address-space manager.
-- M3-003 Kernel heap.
-- M3-004 Guard pages and non-executable mappings.
-- M3-005 Allocator property tests and stress harness.
+- M3-001 Local APIC/PIT timer strategy.
+- M3-002 Interrupt-controller initialization.
+- M3-003 PS/2 keyboard input for QEMU.
+- M3-004 Kernel task model and cooperative scheduler.
+- M3-005 Interactive command shell.
+- M3-006 QEMU input and scheduling integration tests.
 
-## M4 — Scheduling and User Mode
+## M4 — Virtual Memory and User Mode
 
-- M4-001 Kernel threads.
-- M4-002 Preemptive scheduler.
-- M4-003 Ring-3 transition.
-- M4-004 System-call ABI.
-- M4-005 Process and capability object model.
+- Page-table ownership and address-space manager.
+- Guard pages and non-executable mappings.
+- Production kernel heap.
+- Ring-3 transition and syscall ABI.
+- Process and capability object model.
 
 ## Later epics
 

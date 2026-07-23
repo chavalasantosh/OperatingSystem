@@ -1,5 +1,7 @@
 #![cfg_attr(not(test), no_std)]
 
+pub mod memory;
+
 /// Minimal output boundary used before the full device and logging stacks exist.
 pub trait Console {
     /// Writes one byte. Early consoles currently accept printable ASCII plus
@@ -43,9 +45,8 @@ pub trait Console {
 /// Firmware memory map retained after UEFI boot services are terminated.
 ///
 /// The buffer is owned by the boot image and remains mapped when control moves
-/// into the M1 kernel. The kernel must interpret entries using
-/// `descriptor_size`; it must not assume descriptors are tightly packed using
-/// the Rust structure size.
+/// into the kernel. The kernel must interpret entries using `descriptor_size`;
+/// it must not assume descriptors are tightly packed using a Rust structure.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct MemoryMapInfo {
     pub buffer_address: usize,
@@ -94,11 +95,37 @@ impl BootInfo {
     }
 }
 
-/// Earliest architecture-independent kernel entry point after firmware exit.
-///
-/// M1 proves that the kernel receives an owned boot-information structure and
-/// can continue emitting diagnostics without UEFI console services.
-pub fn kernel_main(console: &mut dyn Console, boot_info: BootInfo) {
+/// Runtime evidence produced by the M2 protection and memory subsystems.
+#[allow(clippy::struct_excessive_bools)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct M2Report {
+    pub kernel_stack_active: bool,
+    pub gdt_active: bool,
+    pub tss_active: bool,
+    pub idt_active: bool,
+    pub breakpoint_self_test_passed: bool,
+    pub usable_frames: usize,
+    pub allocated_frames: usize,
+    pub heap_allocations: usize,
+    pub heap_remaining_bytes: usize,
+}
+
+impl M2Report {
+    #[must_use]
+    pub const fn gate_passed(self) -> bool {
+        self.kernel_stack_active
+            && self.gdt_active
+            && self.tss_active
+            && self.idt_active
+            && self.breakpoint_self_test_passed
+            && self.usable_frames > 0
+            && self.allocated_frames > 0
+            && self.heap_allocations > 0
+    }
+}
+
+/// Architecture-independent M2 status entry point after firmware exit.
+pub fn kernel_main(console: &mut dyn Console, boot_info: BootInfo, report: M2Report) {
     console.write_line("");
     console.write_line("SanjuOS");
     console.write_line(boot_info.milestone);
@@ -107,19 +134,48 @@ pub fn kernel_main(console: &mut dyn Console, boot_info: BootInfo) {
     console.write_str("Firmware: ");
     console.write_line(boot_info.firmware);
     console.write_line("Firmware boot services: exited");
-    console.write_str("Memory descriptors: ");
-    console.write_usize(boot_info.memory_map.descriptor_count);
+    write_state(console, "Protected kernel stack", report.kernel_stack_active);
+    write_state(console, "GDT", report.gdt_active);
+    write_state(console, "TSS", report.tss_active);
+    write_state(console, "IDT exception handling", report.idt_active);
+    write_state(
+        console,
+        "Breakpoint exception self-test",
+        report.breakpoint_self_test_passed,
+    );
+    console.write_str("Usable physical frames: ");
+    console.write_usize(report.usable_frames);
     console.write_line("");
-    console.write_str("Memory-map bytes: ");
-    console.write_usize(boot_info.memory_map.map_size);
+    console.write_str("Allocated test frames: ");
+    console.write_usize(report.allocated_frames);
     console.write_line("");
-    console.write_line("Kernel ownership gate: passed");
-    console.write_line("Next gate: CPU exceptions and protected kernel stack");
+    console.write_str("Bootstrap heap allocations: ");
+    console.write_usize(report.heap_allocations);
+    console.write_line("");
+    console.write_str("Bootstrap heap remaining bytes: ");
+    console.write_usize(report.heap_remaining_bytes);
+    console.write_line("");
+
+    if report.gate_passed() {
+        console.write_line("M2 core kernel gate: passed");
+        console.write_line("Next gate: timer interrupts, keyboard, scheduler, and shell");
+    } else {
+        console.write_line("M2 core kernel gate: failed");
+    }
+}
+
+fn write_state(console: &mut dyn Console, label: &str, active: bool) {
+    console.write_str(label);
+    if active {
+        console.write_line(": active");
+    } else {
+        console.write_line(": inactive");
+    }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{BootInfo, Console, MemoryMapInfo, kernel_main};
+    use super::{BootInfo, Console, M2Report, MemoryMapInfo, kernel_main};
     use std::string::String;
 
     #[derive(Default)]
@@ -145,27 +201,50 @@ mod tests {
         }
     }
 
+    const fn sample_report() -> M2Report {
+        M2Report {
+            kernel_stack_active: true,
+            gdt_active: true,
+            tss_active: true,
+            idt_active: true,
+            breakpoint_self_test_passed: true,
+            usable_frames: 1_024,
+            allocated_frames: 3,
+            heap_allocations: 2,
+            heap_remaining_bytes: 250_000,
+        }
+    }
+
     #[test]
-    fn boot_banner_confirms_kernel_ownership() {
+    fn m2_banner_confirms_protection_and_memory_gates() {
         let mut console = RecordingConsole::default();
         let info = BootInfo::new(
             "x86_64",
             "UEFI",
-            "Milestone M1: firmware exit and kernel ownership.",
+            "Milestone M2: CPU protection and early memory management.",
             sample_map(),
         );
 
-        kernel_main(&mut console, info);
+        kernel_main(&mut console, info, sample_report());
 
         assert!(console.output.contains("SanjuOS\r\n"));
-        assert!(console.output.contains("Architecture: x86_64\r\n"));
+        assert!(console.output.contains("Protected kernel stack: active\r\n"));
+        assert!(console.output.contains("GDT: active\r\n"));
+        assert!(console.output.contains("TSS: active\r\n"));
         assert!(
             console
                 .output
-                .contains("Firmware boot services: exited\r\n")
+                .contains("Breakpoint exception self-test: active\r\n")
         );
-        assert!(console.output.contains("Memory descriptors: 100\r\n"));
-        assert!(console.output.contains("Kernel ownership gate: passed\r\n"));
+        assert!(console.output.contains("M2 core kernel gate: passed\r\n"));
+    }
+
+    #[test]
+    fn m2_gate_rejects_missing_runtime_evidence() {
+        assert!(sample_report().gate_passed());
+        let mut failed = sample_report();
+        failed.idt_active = false;
+        assert!(!failed.gate_passed());
     }
 
     #[test]

@@ -4,11 +4,11 @@ version = 4
 
 [[package]]
 name = "sanju-boot"
-version = "0.0.1"
+version = "0.0.2"
 dependencies = [
  "sanju-kernel",
 ]
 
 [[package]]
 name = "sanju-kernel"
-version = "0.0.1"
+version = "0.0.2"

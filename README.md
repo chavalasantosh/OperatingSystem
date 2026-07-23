@@ -1,35 +1,39 @@
 # SanjuOS
 
-SanjuOS is a long-term project to build an independent, secure, AI-native desktop operating system. It is **not** a Linux distribution. The project begins with a minimal x86-64 UEFI boot path and a freestanding Rust core, then grows through tested increments toward memory management, processes, drivers, graphics, user space, applications, installation, updates, and laptop-specific hardware support.
+SanjuOS is a long-term project to build an independent, secure, AI-native desktop operating system. It is **not** a Linux distribution. The project begins with a minimal x86-64 UEFI boot path and a freestanding Rust core, then grows through tested increments toward processes, drivers, graphics, user space, applications, installation, updates, and laptop-specific hardware support.
 
-## Current checkpoint: M1-alpha — Kernel Ownership
+## Current checkpoint: M2-alpha — Protected Core Kernel
 
-The source now provides:
+M1 is verified in GitHub Actions/QEMU. The M2 implementation adds:
 
-- a Rust 2024 workspace using the current stable toolchain;
-- a dependency-free x86-64 UEFI boot application;
-- a freestanding `no_std` kernel-core crate;
-- validated UEFI system-table and boot-services boundaries;
-- a statically owned, aligned firmware memory-map buffer;
-- retry-safe `GetMemoryMap` and `ExitBootServices` logic;
-- an early 16550/COM1 serial logger that survives firmware exit;
-- an owned boot-information ABI passed into the kernel core;
-- QEMU/OVMF run and deterministic smoke-test scripts;
-- host-side unit tests and dependency-free source/ABI checks;
-- CI, security, architecture, Agile, and SDLC foundations.
+- a dedicated 64 KiB kernel stack and one-way firmware-stack transition;
+- a long-mode GDT and TSS;
+- a dedicated double-fault IST stack;
+- an IDT for breakpoint, double fault, general protection, and page fault;
+- a recoverable breakpoint exception self-test;
+- fatal page-fault diagnostics including CR2;
+- a physical frame allocator over UEFI conventional memory;
+- a 256 KiB aligned bootstrap bump heap;
+- host tests, structural ABI checks, and a deterministic QEMU gate.
 
-The M1 smoke output should contain:
+Expected M2 smoke output:
 
 ```text
 SanjuOS
-Milestone M1: firmware exit and kernel ownership.
+Milestone M2: CPU protection and early memory management.
 Architecture: x86_64
 Firmware: UEFI
 Firmware boot services: exited
-Memory descriptors: <firmware-dependent count>
-Memory-map bytes: <firmware-dependent size>
-Kernel ownership gate: passed
-Next gate: CPU exceptions and protected kernel stack
+Protected kernel stack: active
+GDT: active
+TSS: active
+IDT exception handling: active
+Breakpoint exception self-test: active
+Usable physical frames: <firmware-dependent count>
+Allocated test frames: 3
+Bootstrap heap allocations: 1
+M2 core kernel gate: passed
+Next gate: timer interrupts, keyboard, scheduler, and shell
 ```
 
 ## Engineering principles
@@ -45,7 +49,7 @@ Next gate: CPU exceptions and protected kernel stack
 
 ## Prerequisites
 
-The reference development environment is Ubuntu or Ubuntu under WSL2.
+The reference environment is Ubuntu or Ubuntu under WSL2.
 
 ```bash
 sudo apt update
@@ -75,8 +79,8 @@ make run
 ## Repository map
 
 ```text
-boot/uefi/          UEFI firmware entry point, ABI, and serial adapter
-kernel/             Architecture-independent freestanding core
+boot/uefi/          UEFI entry, x86-64 CPU setup, and early serial adapter
+kernel/             Freestanding core, memory-map model, frame and heap allocators
 scripts/            Build, image, QEMU, source-check, and test automation
 docs/requirements/  Product and system requirements
 docs/architecture/  System boundaries and technical design
@@ -88,22 +92,8 @@ docs/process/       Agile, SDLC, backlog, and definition of done
 
 ## Safety
 
-Do not install this project onto a physical disk. M1-alpha is emulator-only. Physical-hardware deployment begins only after storage safety, recovery, boot fallback, and device-specific validation gates exist.
+Do not install this project onto a physical disk. M2-alpha is emulator-only. Physical-hardware deployment begins only after storage safety, recovery, boot fallback, page-table ownership, and device-specific validation gates exist.
 
 ## Verification status
 
-The source and UEFI ABI invariants have been checked in the current workspace. Compiler, Clippy, and QEMU verification remain pending because this workspace cannot download or install Rust, QEMU, or OVMF. M1 is not accepted until those gates pass on a configured development machine or CI runner.
-
-## Restricted-environment verification probe
-
-When Rust or QEMU cannot be installed, the repository includes a separate
-LLVM/LLD UEFI probe that validates the PE/COFF firmware contract without
-changing the Rust-first product architecture:
-
-```bash
-make verify-probe
-```
-
-A passing probe proves that a real x86-64 `BOOTX64.EFI` was compiled and has
-the EFI application subsystem. It does not count as a QEMU boot; the official
-M1 release gate remains `make smoke` with Rust, QEMU, and OVMF installed.
+M1 has passed the QEMU smoke gate. M2 source and ABI checks can run without Rust; M2 acceptance still requires the complete GitHub Actions quality and QEMU jobs to pass from a clean checkout.

@@ -25,7 +25,7 @@ mkdir -p build
 rm -f build/qemu-debug.log
 
 set +e
-qemu-system-x86_64 \
+timeout 20s qemu-system-x86_64 \
   -machine q35,accel=tcg \
   -cpu max \
   -m 256M \
@@ -50,9 +50,13 @@ if [[ "$qemu_status" -ne 33 ]]; then
   exit 1
 fi
 
-grep -Fq "Milestone M1: firmware exit and kernel ownership." build/qemu-debug.log
-grep -Fq "Architecture: x86_64" build/qemu-debug.log
-grep -Fq "Kernel ownership gate: passed" build/qemu-debug.log
+grep -Fq "Milestone M2: CPU protection and early memory management." build/qemu-debug.log
+grep -Fq "Protected kernel stack: active" build/qemu-debug.log
+grep -Fq "GDT: active" build/qemu-debug.log
+grep -Fq "TSS: active" build/qemu-debug.log
+grep -Fq "IDT exception handling: active" build/qemu-debug.log
+grep -Fq "Breakpoint exception self-test: active" build/qemu-debug.log
+grep -Fq "M2 core kernel gate: passed" build/qemu-debug.log
 
 echo "QEMU smoke test passed."
 cat build/qemu-debug.log

@@ -1,13 +1,16 @@
 #![no_std]
 #![no_main]
 
+mod cpu;
 mod serial;
 
+use core::alloc::Layout;
 use core::ffi::c_void;
-use core::mem::size_of;
+use core::mem::{MaybeUninit, size_of};
 use core::panic::PanicInfo;
-use core::ptr::addr_of_mut;
-use sanju_kernel::{BootInfo, Console, MemoryMapInfo, kernel_main};
+use core::ptr::{addr_of, addr_of_mut};
+use sanju_kernel::memory::{BumpAllocator, FrameAllocator};
+use sanju_kernel::{BootInfo, Console, M2Report, MemoryMapInfo, kernel_main};
 use serial::SerialConsole;
 
 type EfiHandle = *mut c_void;
@@ -21,6 +24,7 @@ const EFI_SYSTEM_TABLE_SIGNATURE: u64 = 0x5453_5953_2049_4249;
 const EFI_BOOT_SERVICES_SIGNATURE: u64 = 0x5652_4553_544f_4f42;
 const MEMORY_MAP_CAPACITY: usize = 256 * 1024;
 const EXIT_BOOT_SERVICES_RETRIES: usize = 8;
+const KERNEL_HEAP_SIZE: usize = 256 * 1024;
 
 const fn efi_error_code(code: usize) -> usize {
     (1usize << (usize::BITS - 1)) | code
@@ -145,6 +149,12 @@ struct MemoryMapStorage([u8; MEMORY_MAP_CAPACITY]);
 
 static mut MEMORY_MAP_STORAGE: MemoryMapStorage = MemoryMapStorage([0; MEMORY_MAP_CAPACITY]);
 
+#[repr(C, align(4096))]
+struct KernelHeapStorage([u8; KERNEL_HEAP_SIZE]);
+
+static mut KERNEL_HEAP_STORAGE: KernelHeapStorage = KernelHeapStorage([0; KERNEL_HEAP_SIZE]);
+static mut BOOT_INFO_SLOT: MaybeUninit<BootInfo> = MaybeUninit::uninit();
+
 struct UefiConsole {
     protocol: *mut SimpleTextOutputProtocol,
 }
@@ -250,7 +260,7 @@ extern "efiapi" fn efi_main(
     };
 
     pre_exit.clear_screen();
-    pre_exit.write_line("SanjuOS M1 boot transition");
+    pre_exit.write_line("SanjuOS M2 boot transition");
     pre_exit.write_line("Capturing UEFI memory map...");
 
     let get_memory_map = boot_services.get_memory_map;
@@ -259,7 +269,8 @@ extern "efiapi" fn efi_main(
     let snapshot = match exit_firmware(image_handle, get_memory_map, exit_boot_services) {
         Ok(snapshot) => snapshot,
         Err(status) => {
-            let _ = status; // prevent unused variable warning under qemu-test
+            #[cfg(feature = "qemu-test")]
+            let _ = status;
             pre_exit.write_line("FATAL: firmware ownership transition failed.");
             #[cfg(feature = "qemu-test")]
             qemu::exit_failure();
@@ -270,14 +281,114 @@ extern "efiapi" fn efi_main(
     };
 
     // UEFI console and boot-services pointers are invalid beyond this point.
-    // Only the serial/debug console and captured memory map may be used.
+    // Persist owned boot facts before abandoning the firmware-provided stack.
     let boot_info = BootInfo::new(
         "x86_64",
         "UEFI",
-        "Milestone M1: firmware exit and kernel ownership.",
+        "Milestone M2: CPU protection and early memory management.",
         snapshot.info,
     );
-    kernel_main(&mut kernel_console, boot_info);
+    // SAFETY: Single-core early boot has exclusive ownership of this slot.
+    unsafe {
+        addr_of_mut!(BOOT_INFO_SLOT).cast::<BootInfo>().write(boot_info);
+        cpu::switch_to_kernel_stack(sanju_m2_kernel_entry);
+    }
+}
+
+#[unsafe(no_mangle)]
+extern "efiapi" fn sanju_m2_kernel_entry() -> ! {
+    // SAFETY: `efi_main` initializes the slot exactly once before switching to
+    // this stack and no other execution context can access it during M2 boot.
+    let boot_info = unsafe { addr_of!(BOOT_INFO_SLOT).cast::<BootInfo>().read() };
+    let mut console = KernelConsole::initialize();
+
+    // SAFETY: Firmware has exited, execution is on the dedicated kernel stack,
+    // and M2 is still a single-core boot with interrupts disabled.
+    let cpu_report = unsafe { cpu::initialize() };
+
+    // SAFETY: The map is retained in static boot storage for the kernel's life.
+    let mut frame_allocator =
+        match unsafe { FrameAllocator::from_memory_map(boot_info.memory_map) } {
+            Ok(allocator) => allocator,
+            Err(_) => {
+                console.write_line("FATAL: physical frame allocator initialization failed.");
+                #[cfg(feature = "qemu-test")]
+                qemu::exit_failure();
+
+                #[cfg(not(feature = "qemu-test"))]
+                halt_forever();
+            }
+        };
+
+    let usable_frames =
+        usize::try_from(frame_allocator.total_usable_frames()).unwrap_or(usize::MAX);
+    for _ in 0..3 {
+        if frame_allocator.allocate_frame().is_none() {
+            console.write_line("FATAL: insufficient conventional memory for M2.");
+            #[cfg(feature = "qemu-test")]
+            qemu::exit_failure();
+
+            #[cfg(not(feature = "qemu-test"))]
+            halt_forever();
+        }
+    }
+
+    let mut heap = BumpAllocator::new();
+    let heap_start = addr_of_mut!(KERNEL_HEAP_STORAGE.0).cast::<u8>().addr();
+    // SAFETY: The static heap range is mapped, writable, and exclusively owned
+    // by the bootstrap allocator during this single-core phase.
+    if unsafe { heap.initialize(heap_start, KERNEL_HEAP_SIZE) }.is_err() {
+        console.write_line("FATAL: bootstrap heap initialization failed.");
+        #[cfg(feature = "qemu-test")]
+        qemu::exit_failure();
+
+        #[cfg(not(feature = "qemu-test"))]
+        halt_forever();
+    }
+
+    let layout = match Layout::from_size_align(64, 16) {
+        Ok(layout) => layout,
+        Err(_) => {
+            console.write_line("FATAL: bootstrap heap layout rejected.");
+            #[cfg(feature = "qemu-test")]
+            qemu::exit_failure();
+
+            #[cfg(not(feature = "qemu-test"))]
+            halt_forever();
+        }
+    };
+    let Some(allocation) = heap.allocate(layout) else {
+        console.write_line("FATAL: bootstrap heap allocation failed.");
+        #[cfg(feature = "qemu-test")]
+        qemu::exit_failure();
+
+        #[cfg(not(feature = "qemu-test"))]
+        halt_forever();
+    };
+    // SAFETY: The allocator returned an exclusive 64-byte writable block.
+    unsafe { allocation.as_ptr().write_bytes(0xa5, layout.size()) };
+
+    let report = M2Report {
+        kernel_stack_active: cpu_report.kernel_stack_active,
+        gdt_active: cpu_report.gdt_active,
+        tss_active: cpu_report.tss_active,
+        idt_active: cpu_report.idt_active,
+        breakpoint_self_test_passed: cpu_report.breakpoint_self_test_passed,
+        usable_frames,
+        allocated_frames: usize::try_from(frame_allocator.allocated_frames())
+            .unwrap_or(usize::MAX),
+        heap_allocations: heap.allocations(),
+        heap_remaining_bytes: heap.remaining_bytes(),
+    };
+    kernel_main(&mut console, boot_info, report);
+
+    if !report.gate_passed() {
+        #[cfg(feature = "qemu-test")]
+        qemu::exit_failure();
+
+        #[cfg(not(feature = "qemu-test"))]
+        halt_forever();
+    }
 
     #[cfg(feature = "qemu-test")]
     qemu::exit_success();
@@ -385,7 +496,7 @@ fn panic(_info: &PanicInfo<'_>) -> ! {
 #[allow(dead_code)]
 fn halt_forever() -> ! {
     loop {
-        // SAFETY: Halting is the intended terminal state after M1 completes or
+        // SAFETY: Halting is the intended terminal state after M2 completes or
         // encounters a non-recoverable condition. Interrupts are disabled to
         // avoid entering firmware-installed handlers after boot-services exit.
         unsafe {

@@ -21,7 +21,7 @@ impl SerialConsole {
     pub fn initialize() -> Self {
         // SAFETY: SanjuOS executes at firmware/kernel privilege on x86-64. The
         // selected ports are the conventional 16550 COM1 register range. QEMU
-        // provides this device for M1; physical deployment is not yet allowed.
+        // provides this device for M2; physical deployment is not yet allowed.
         unsafe {
             outb(COM1 + INTERRUPT_ENABLE, 0x00);
             outb(COM1 + LINE_CONTROL, 0x80);
