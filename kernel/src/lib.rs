@@ -1,6 +1,10 @@
 #![cfg_attr(not(test), no_std)]
 
+pub mod fs;
+pub mod input;
 pub mod memory;
+pub mod scheduler;
+pub mod shell;
 
 /// Minimal output boundary used before the full device and logging stacks exist.
 pub trait Console {
@@ -21,8 +25,13 @@ pub trait Console {
         self.write_str("\r\n");
     }
 
-    /// Writes an unsigned integer without allocation or formatting machinery.
-    fn write_usize(&mut self, mut value: usize) {
+    /// Writes an unsigned pointer-sized integer without allocation.
+    fn write_usize(&mut self, value: usize) {
+        self.write_u64(u64::try_from(value).unwrap_or(u64::MAX));
+    }
+
+    /// Writes an unsigned 64-bit integer without allocation.
+    fn write_u64(&mut self, mut value: u64) {
         if value == 0 {
             self.write_byte(b'0');
             return;
@@ -43,10 +52,6 @@ pub trait Console {
 }
 
 /// Firmware memory map retained after UEFI boot services are terminated.
-///
-/// The buffer is owned by the boot image and remains mapped when control moves
-/// into the kernel. The kernel must interpret entries using `descriptor_size`;
-/// it must not assume descriptors are tightly packed using a Rust structure.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct MemoryMapInfo {
     pub buffer_address: usize,
@@ -95,22 +100,36 @@ impl BootInfo {
     }
 }
 
-/// Runtime evidence produced by the M2 protection and memory subsystems.
+/// Runtime evidence produced by the combined M3/M4 kernel batch.
 #[allow(clippy::struct_excessive_bools)]
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct M2Report {
+pub struct M4Report {
     pub kernel_stack_active: bool,
     pub gdt_active: bool,
     pub tss_active: bool,
     pub idt_active: bool,
     pub breakpoint_self_test_passed: bool,
+    pub timer_interrupts_active: bool,
+    pub timer_ticks: u64,
+    pub timer_hz: u64,
+    pub keyboard_interrupt_path_active: bool,
+    pub keyboard_irqs: u64,
+    pub keyboard_scancodes_dropped: u64,
     pub usable_frames: usize,
     pub allocated_frames: usize,
     pub heap_allocations: usize,
     pub heap_remaining_bytes: usize,
+    pub scheduler_active: bool,
+    pub scheduler_tasks: usize,
+    pub scheduler_context_switches: u64,
+    pub scheduler_dispatches: u64,
+    pub shell_active: bool,
+    pub shell_commands_executed: usize,
+    pub ramfs_active: bool,
+    pub ramfs_files: usize,
 }
 
-impl M2Report {
+impl M4Report {
     #[must_use]
     pub const fn gate_passed(self) -> bool {
         self.kernel_stack_active
@@ -118,14 +137,28 @@ impl M2Report {
             && self.tss_active
             && self.idt_active
             && self.breakpoint_self_test_passed
+            && self.timer_interrupts_active
+            && self.timer_ticks > 0
+            && self.timer_hz > 0
+            && self.keyboard_interrupt_path_active
+            && self.keyboard_irqs > 0
             && self.usable_frames > 0
             && self.allocated_frames > 0
             && self.heap_allocations > 0
+            && self.scheduler_active
+            && self.scheduler_tasks >= 3
+            && self.scheduler_context_switches > 0
+            && self.scheduler_dispatches > 0
+            && self.shell_active
+            && self.shell_commands_executed > 0
+            && self.ramfs_active
+            && self.ramfs_files >= 2
     }
 }
 
-/// Architecture-independent M2 status entry point after firmware exit.
-pub fn kernel_main(console: &mut dyn Console, boot_info: BootInfo, report: M2Report) {
+/// Architecture-independent M4 status entry point after runtime initialization.
+#[allow(clippy::too_many_lines)]
+pub fn kernel_main(console: &mut dyn Console, boot_info: BootInfo, report: M4Report) {
     console.write_line("");
     console.write_line("SanjuOS");
     console.write_line(boot_info.milestone);
@@ -134,11 +167,7 @@ pub fn kernel_main(console: &mut dyn Console, boot_info: BootInfo, report: M2Rep
     console.write_str("Firmware: ");
     console.write_line(boot_info.firmware);
     console.write_line("Firmware boot services: exited");
-    write_state(
-        console,
-        "Protected kernel stack",
-        report.kernel_stack_active,
-    );
+    write_state(console, "Protected kernel stack", report.kernel_stack_active);
     write_state(console, "GDT", report.gdt_active);
     write_state(console, "TSS", report.tss_active);
     write_state(console, "IDT exception handling", report.idt_active);
@@ -147,10 +176,30 @@ pub fn kernel_main(console: &mut dyn Console, boot_info: BootInfo, report: M2Rep
         "Breakpoint exception self-test",
         report.breakpoint_self_test_passed,
     );
+    write_state(
+        console,
+        "PIT timer interrupts",
+        report.timer_interrupts_active,
+    );
+    console.write_str("Timer ticks observed: ");
+    console.write_u64(report.timer_ticks);
+    console.write_str(" at ");
+    console.write_u64(report.timer_hz);
+    console.write_line(" Hz");
+    write_state(
+        console,
+        "PS/2 keyboard interrupt path",
+        report.keyboard_interrupt_path_active,
+    );
+    console.write_str("Keyboard IRQs observed: ");
+    console.write_u64(report.keyboard_irqs);
+    console.write_str(", dropped scancodes: ");
+    console.write_u64(report.keyboard_scancodes_dropped);
+    console.write_line("");
     console.write_str("Usable physical frames: ");
     console.write_usize(report.usable_frames);
     console.write_line("");
-    console.write_str("Allocated test frames: ");
+    console.write_str("Allocated bootstrap frames: ");
     console.write_usize(report.allocated_frames);
     console.write_line("");
     console.write_str("Bootstrap heap allocations: ");
@@ -159,12 +208,30 @@ pub fn kernel_main(console: &mut dyn Console, boot_info: BootInfo, report: M2Rep
     console.write_str("Bootstrap heap remaining bytes: ");
     console.write_usize(report.heap_remaining_bytes);
     console.write_line("");
+    write_state(console, "Round-robin scheduler", report.scheduler_active);
+    console.write_str("Scheduler tasks: ");
+    console.write_usize(report.scheduler_tasks);
+    console.write_str(", context switches: ");
+    console.write_u64(report.scheduler_context_switches);
+    console.write_str(", dispatches: ");
+    console.write_u64(report.scheduler_dispatches);
+    console.write_line("");
+    write_state(console, "Interactive kernel shell", report.shell_active);
+    console.write_str("Shell commands executed: ");
+    console.write_usize(report.shell_commands_executed);
+    console.write_line("");
+    write_state(console, "RAM filesystem", report.ramfs_active);
+    console.write_str("RAM filesystem files: ");
+    console.write_usize(report.ramfs_files);
+    console.write_line("");
 
     if report.gate_passed() {
-        console.write_line("M2 core kernel gate: passed");
-        console.write_line("Next gate: timer interrupts, keyboard, scheduler, and shell");
+        console.write_line("M4 interactive runtime gate: passed");
+        console.write_line(
+            "Next gate: paging ownership, user mode, syscalls, and executable loading",
+        );
     } else {
-        console.write_line("M2 core kernel gate: failed");
+        console.write_line("M4 interactive runtime gate: failed");
     }
 }
 
@@ -179,7 +246,7 @@ fn write_state(console: &mut dyn Console, label: &str, active: bool) {
 
 #[cfg(test)]
 mod tests {
-    use super::{BootInfo, Console, M2Report, MemoryMapInfo, kernel_main};
+    use super::{BootInfo, Console, M4Report, MemoryMapInfo, kernel_main};
     use std::string::String;
 
     #[derive(Default)]
@@ -205,53 +272,75 @@ mod tests {
         }
     }
 
-    const fn sample_report() -> M2Report {
-        M2Report {
+    const fn sample_report() -> M4Report {
+        M4Report {
             kernel_stack_active: true,
             gdt_active: true,
             tss_active: true,
             idt_active: true,
             breakpoint_self_test_passed: true,
+            timer_interrupts_active: true,
+            timer_ticks: 10,
+            timer_hz: 100,
+            keyboard_interrupt_path_active: true,
+            keyboard_irqs: 1,
+            keyboard_scancodes_dropped: 0,
             usable_frames: 1_024,
             allocated_frames: 3,
             heap_allocations: 2,
             heap_remaining_bytes: 250_000,
+            scheduler_active: true,
+            scheduler_tasks: 3,
+            scheduler_context_switches: 8,
+            scheduler_dispatches: 8,
+            shell_active: true,
+            shell_commands_executed: 4,
+            ramfs_active: true,
+            ramfs_files: 2,
         }
     }
 
     #[test]
-    fn m2_banner_confirms_protection_and_memory_gates() {
+    fn m4_banner_confirms_interrupt_scheduler_shell_and_fs_gates() {
         let mut console = RecordingConsole::default();
         let info = BootInfo::new(
             "x86_64",
             "UEFI",
-            "Milestone M2: CPU protection and early memory management.",
+            "Milestone M4: interrupt-driven runtime and interactive kernel environment.",
             sample_map(),
         );
 
         kernel_main(&mut console, info, sample_report());
 
-        assert!(console.output.contains("SanjuOS\r\n"));
+        assert!(console.output.contains("PIT timer interrupts: active\r\n"));
         assert!(
             console
                 .output
-                .contains("Protected kernel stack: active\r\n")
+                .contains("PS/2 keyboard interrupt path: active\r\n")
         );
-        assert!(console.output.contains("GDT: active\r\n"));
-        assert!(console.output.contains("TSS: active\r\n"));
         assert!(
             console
                 .output
-                .contains("Breakpoint exception self-test: active\r\n")
+                .contains("Round-robin scheduler: active\r\n")
         );
-        assert!(console.output.contains("M2 core kernel gate: passed\r\n"));
+        assert!(
+            console
+                .output
+                .contains("Interactive kernel shell: active\r\n")
+        );
+        assert!(console.output.contains("RAM filesystem: active\r\n"));
+        assert!(
+            console
+                .output
+                .contains("M4 interactive runtime gate: passed\r\n")
+        );
     }
 
     #[test]
-    fn m2_gate_rejects_missing_runtime_evidence() {
+    fn m4_gate_rejects_missing_runtime_evidence() {
         assert!(sample_report().gate_passed());
         let mut failed = sample_report();
-        failed.idt_active = false;
+        failed.timer_ticks = 0;
         assert!(!failed.gate_passed());
     }
 
@@ -269,13 +358,11 @@ mod tests {
     }
 
     #[test]
-    fn write_line_and_integer_output_are_allocation_free_boundaries() {
+    fn console_integer_output_is_allocation_free() {
         let mut console = RecordingConsole::default();
-        console.write_line("ready");
-        console.write_usize(0);
+        console.write_u64(0);
         console.write_byte(b' ');
-        console.write_usize(12_345);
-
-        assert_eq!(console.output, "ready\r\n0 12345");
+        console.write_u64(12_345_678_901);
+        assert_eq!(console.output, "0 12345678901");
     }
 }

@@ -1,5 +1,25 @@
 # Changelog
 
+## M4-alpha combined runtime implementation — 2026-07-24
+
+### Added
+
+- Legacy PIC remapping with IRQ0/IRQ1 policy and end-of-interrupt handling.
+- 100 Hz PIT timer with observable interrupt ticks.
+- PS/2 keyboard IRQ path, bounded lock-free scancode queue, and Set-1 decoder.
+- Fixed-capacity round-robin kernel task scheduler.
+- Allocation-free interactive shell with runtime diagnostics.
+- Writable RAM filesystem and shell commands for listing, reading, and writing files.
+- Scripted QEMU acceptance flow covering timer, keyboard vector, scheduler, shell, and RAMFS.
+
+### Delivery model
+
+M3 and M4 were intentionally combined into one major batch to reduce micro-commit and CI overhead.
+
+### Safety status
+
+Emulator-only. Physical installation remains unsupported.
+
 ## M2-alpha implementation — 2026-07-24
 
 ### Added

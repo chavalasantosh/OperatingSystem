@@ -9,8 +9,13 @@ use core::ffi::c_void;
 use core::mem::{MaybeUninit, size_of};
 use core::panic::PanicInfo;
 use core::ptr::{addr_of, addr_of_mut};
+use sanju_kernel::fs::RamFs;
+#[cfg(not(feature = "qemu-test"))]
+use sanju_kernel::input::KeyboardDecoder;
 use sanju_kernel::memory::{BumpAllocator, FrameAllocator};
-use sanju_kernel::{BootInfo, Console, M2Report, MemoryMapInfo, kernel_main};
+use sanju_kernel::scheduler::{Scheduler, TaskKind};
+use sanju_kernel::shell::{Shell, ShellEnvironment};
+use sanju_kernel::{BootInfo, Console, M4Report, MemoryMapInfo, kernel_main};
 use serial::SerialConsole;
 
 type EfiHandle = *mut c_void;
@@ -222,6 +227,12 @@ impl Console for KernelConsole {
     }
 }
 
+struct NullConsole;
+
+impl Console for NullConsole {
+    fn write_byte(&mut self, _byte: u8) {}
+}
+
 #[derive(Clone, Copy)]
 struct MemoryMapSnapshot {
     info: MemoryMapInfo,
@@ -260,7 +271,7 @@ extern "efiapi" fn efi_main(
     };
 
     pre_exit.clear_screen();
-    pre_exit.write_line("SanjuOS M2 boot transition");
+    pre_exit.write_line("SanjuOS M4 boot transition");
     pre_exit.write_line("Capturing UEFI memory map...");
 
     let get_memory_map = boot_services.get_memory_map;
@@ -285,7 +296,7 @@ extern "efiapi" fn efi_main(
     let boot_info = BootInfo::new(
         "x86_64",
         "UEFI",
-        "Milestone M2: CPU protection and early memory management.",
+        "Milestone M4: interrupt-driven runtime and interactive kernel environment.",
         snapshot.info,
     );
     // SAFETY: Single-core early boot has exclusive ownership of this slot.
@@ -293,19 +304,20 @@ extern "efiapi" fn efi_main(
         addr_of_mut!(BOOT_INFO_SLOT)
             .cast::<BootInfo>()
             .write(boot_info);
-        cpu::switch_to_kernel_stack(sanju_m2_kernel_entry);
+        cpu::switch_to_kernel_stack(sanju_m4_kernel_entry);
     }
 }
 
+#[allow(clippy::too_many_lines)]
 #[unsafe(no_mangle)]
-extern "efiapi" fn sanju_m2_kernel_entry() -> ! {
+extern "efiapi" fn sanju_m4_kernel_entry() -> ! {
     // SAFETY: `efi_main` initializes the slot exactly once before switching to
-    // this stack and no other execution context can access it during M2 boot.
+    // this stack and no other execution context can access it during the M4 boot path.
     let boot_info = unsafe { addr_of!(BOOT_INFO_SLOT).cast::<BootInfo>().read() };
     let mut console = KernelConsole::initialize();
 
     // SAFETY: Firmware has exited, execution is on the dedicated kernel stack,
-    // and M2 is still a single-core boot with interrupts disabled.
+    // and the bootstrap path is still single-core with interrupts disabled.
     let cpu_report = unsafe { cpu::initialize() };
 
     // SAFETY: The map is retained in static boot storage for the kernel's life.
@@ -324,7 +336,7 @@ extern "efiapi" fn sanju_m2_kernel_entry() -> ! {
         usize::try_from(frame_allocator.total_usable_frames()).unwrap_or(usize::MAX);
     for _ in 0..3 {
         if frame_allocator.allocate_frame().is_none() {
-            console.write_line("FATAL: insufficient conventional memory for M2.");
+            console.write_line("FATAL: insufficient conventional memory for M4 bootstrap.");
             #[cfg(feature = "qemu-test")]
             qemu::exit_failure();
 
@@ -366,16 +378,67 @@ extern "efiapi" fn sanju_m2_kernel_entry() -> ! {
     // SAFETY: The allocator returned an exclusive 64-byte writable block.
     unsafe { allocation.as_ptr().write_bytes(0xa5, layout.size()) };
 
-    let report = M2Report {
+    // SAFETY: CPU tables are installed, the bootstrap processor owns the PIC
+    // and PIT, and no other driver accesses those ports during this phase.
+    let interrupt_report = unsafe { cpu::initialize_interrupt_runtime() };
+
+    let mut scheduler = Scheduler::new();
+    let scheduler_ready = scheduler.add_task(TaskKind::Idle).is_some()
+        && scheduler.add_task(TaskKind::Shell).is_some()
+        && scheduler.add_task(TaskKind::SystemMonitor).is_some();
+    for offset in 0..12_u64 {
+        let _ = scheduler.dispatch_next(cpu::timer_ticks().saturating_add(offset));
+    }
+    let scheduler_stats = scheduler.stats();
+
+    let mut ramfs = RamFs::with_defaults();
+    let mut shell = Shell::new();
+    let mut null_console = NullConsole;
+    let self_test_environment = ShellEnvironment {
+        timer_ticks: cpu::timer_ticks(),
+        timer_hz: cpu::TIMER_HZ,
+        keyboard_irqs: cpu::keyboard_irqs(),
+        usable_frames,
+        allocated_frames: usize::try_from(frame_allocator.allocated_frames())
+            .unwrap_or(usize::MAX),
+        scheduler_tasks: scheduler_stats.task_count,
+        scheduler_switches: scheduler_stats.context_switches,
+        scheduler_dispatches: scheduler_stats.dispatches,
+    };
+    for byte in b"version\n" {
+        shell.feed_byte(
+            *byte,
+            &mut null_console,
+            &mut ramfs,
+            &self_test_environment,
+        );
+    }
+
+    let report = M4Report {
         kernel_stack_active: cpu_report.kernel_stack_active,
         gdt_active: cpu_report.gdt_active,
         tss_active: cpu_report.tss_active,
         idt_active: cpu_report.idt_active,
         breakpoint_self_test_passed: cpu_report.breakpoint_self_test_passed,
+        timer_interrupts_active: interrupt_report.timer_interrupts_active,
+        timer_ticks: interrupt_report.timer_ticks,
+        timer_hz: interrupt_report.timer_hz,
+        keyboard_interrupt_path_active: interrupt_report.keyboard_interrupt_path_active,
+        keyboard_irqs: interrupt_report.keyboard_irqs,
+        keyboard_scancodes_dropped: interrupt_report.dropped_scancodes,
         usable_frames,
-        allocated_frames: usize::try_from(frame_allocator.allocated_frames()).unwrap_or(usize::MAX),
+        allocated_frames: usize::try_from(frame_allocator.allocated_frames())
+            .unwrap_or(usize::MAX),
         heap_allocations: heap.allocations(),
         heap_remaining_bytes: heap.remaining_bytes(),
+        scheduler_active: scheduler_ready && scheduler_stats.dispatches > 0,
+        scheduler_tasks: scheduler_stats.task_count,
+        scheduler_context_switches: scheduler_stats.context_switches,
+        scheduler_dispatches: scheduler_stats.dispatches,
+        shell_active: true,
+        shell_commands_executed: shell.commands_executed(),
+        ramfs_active: true,
+        ramfs_files: ramfs.file_count(),
     };
     kernel_main(&mut console, boot_info, report);
 
@@ -387,11 +450,59 @@ extern "efiapi" fn sanju_m2_kernel_entry() -> ! {
         halt_forever();
     }
 
+    Shell::start(&mut console);
+
     #[cfg(feature = "qemu-test")]
-    qemu::exit_success();
+    {
+        let environment = ShellEnvironment {
+            timer_ticks: cpu::timer_ticks(),
+            timer_hz: cpu::TIMER_HZ,
+            keyboard_irqs: cpu::keyboard_irqs(),
+            usable_frames,
+            allocated_frames: report.allocated_frames,
+            scheduler_tasks: scheduler_stats.task_count,
+            scheduler_switches: scheduler_stats.context_switches,
+            scheduler_dispatches: scheduler_stats.dispatches,
+        };
+        let smoke_commands =
+            b"help\nls\ncat welcome.txt\nwrite boot.log runtime-ok\ncat boot.log\ntasks\nuptime\n";
+        for byte in smoke_commands {
+            shell.feed_byte(*byte, &mut console, &mut ramfs, &environment);
+        }
+        qemu::exit_success();
+    }
 
     #[cfg(not(feature = "qemu-test"))]
-    halt_forever()
+    {
+        let mut decoder = KeyboardDecoder::new();
+        let mut last_scheduled_tick = cpu::timer_ticks();
+        loop {
+            let current_tick = cpu::timer_ticks();
+            while last_scheduled_tick < current_tick {
+                last_scheduled_tick = last_scheduled_tick.saturating_add(1);
+                let _ = scheduler.dispatch_next(last_scheduled_tick);
+            }
+
+            while let Some(scancode) = cpu::pop_scancode() {
+                if let Some(byte) = decoder.decode(scancode) {
+                    let stats = scheduler.stats();
+                    let environment = ShellEnvironment {
+                        timer_ticks: cpu::timer_ticks(),
+                        timer_hz: cpu::TIMER_HZ,
+                        keyboard_irqs: cpu::keyboard_irqs(),
+                        usable_frames,
+                        allocated_frames: report.allocated_frames,
+                        scheduler_tasks: stats.task_count,
+                        scheduler_switches: stats.context_switches,
+                        scheduler_dispatches: stats.dispatches,
+                    };
+                    shell.feed_byte(byte, &mut console, &mut ramfs, &environment);
+                }
+            }
+
+            cpu::halt_until_interrupt();
+        }
+    }
 }
 
 trait ClearScreen {
@@ -493,7 +604,7 @@ fn panic(_info: &PanicInfo<'_>) -> ! {
 #[allow(dead_code)]
 fn halt_forever() -> ! {
     loop {
-        // SAFETY: Halting is the intended terminal state after M2 completes or
+        // SAFETY: Halting is the intended terminal state after the current milestone or
         // encounters a non-recoverable condition. Interrupts are disabled to
         // avoid entering firmware-installed handlers after boot-services exit.
         unsafe {

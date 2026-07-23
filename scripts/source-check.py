@@ -12,6 +12,10 @@ BOOT = ROOT / "boot/uefi/src/main.rs"
 CPU = ROOT / "boot/uefi/src/cpu.rs"
 KERNEL = ROOT / "kernel/src/lib.rs"
 MEMORY = ROOT / "kernel/src/memory.rs"
+INPUT = ROOT / "kernel/src/input.rs"
+SCHEDULER = ROOT / "kernel/src/scheduler.rs"
+SHELL = ROOT / "kernel/src/shell.rs"
+FILESYSTEM = ROOT / "kernel/src/fs.rs"
 SMOKE = ROOT / "scripts/smoke-test.sh"
 
 
@@ -71,6 +75,10 @@ def main() -> int:
     cpu = CPU.read_text(encoding="utf-8")
     kernel = KERNEL.read_text(encoding="utf-8")
     memory = MEMORY.read_text(encoding="utf-8")
+    input_code = INPUT.read_text(encoding="utf-8")
+    scheduler = SCHEDULER.read_text(encoding="utf-8")
+    shell = SHELL.read_text(encoding="utf-8")
+    filesystem = FILESYSTEM.read_text(encoding="utf-8")
     smoke = SMOKE.read_text(encoding="utf-8")
 
     require(boot, 'extern "efiapi" fn efi_main', BOOT)
@@ -84,12 +92,24 @@ def main() -> int:
     require(cpu, '"ltr ax"', CPU)
     require(cpu, "sanju_double_fault_stub", CPU)
     require(cpu, "sanju_page_fault_stub", CPU)
+    require(cpu, "sanju_timer_interrupt_stub", CPU)
+    require(cpu, "sanju_keyboard_interrupt_stub", CPU)
+    require(cpu, "remap_and_unmask_pic", CPU)
+    require(cpu, "configure_pit", CPU)
     require(memory, "pub struct FrameAllocator", MEMORY)
     require(memory, "EFI_CONVENTIONAL_MEMORY", MEMORY)
     require(memory, "pub struct BumpAllocator", MEMORY)
-    require(kernel, "pub struct M2Report", KERNEL)
-    require(kernel, "M2 core kernel gate: passed", KERNEL)
-    require(smoke, "Milestone M2: CPU protection and early memory management.", SMOKE)
+    require(input_code, "pub struct KeyboardDecoder", INPUT)
+    require(scheduler, "pub struct Scheduler", SCHEDULER)
+    require(shell, "pub struct Shell", SHELL)
+    require(filesystem, "pub struct RamFs", FILESYSTEM)
+    require(kernel, "pub struct M4Report", KERNEL)
+    require(kernel, "M4 interactive runtime gate: passed", KERNEL)
+    require(
+        smoke,
+        "Milestone M4: interrupt-driven runtime and interactive kernel environment.",
+        SMOKE,
+    )
 
     assert ctypes.sizeof(EfiTableHeader) == 24
     assert ctypes.sizeof(EfiMemoryDescriptor) == 40
@@ -103,7 +123,7 @@ def main() -> int:
     exit_boot_services_offset = 24 + (26 * 8)
     assert exit_boot_services_offset == 232
 
-    print("SanjuOS M2 source checks passed.")
+    print("SanjuOS M4 source checks passed.")
     print("UEFI memory descriptor base size: 40 bytes")
     print("x86-64 TSS size: 104 bytes")
     print("x86-64 IDT entry size: 16 bytes")

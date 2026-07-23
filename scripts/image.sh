@@ -12,13 +12,13 @@ for command_name in dd mkfs.vfat mmd mcopy; do
 done
 
 ./scripts/build.sh
-rm -f build/sanju-os-m2-alpha.img
+rm -f build/sanju-os-m4-alpha.img
 
-dd if=/dev/zero of=build/sanju-os-m2-alpha.img bs=1M count=64 status=none
-mkfs.vfat -n SANJUOS build/sanju-os-m2-alpha.img >/dev/null
-mmd -i build/sanju-os-m2-alpha.img ::/EFI ::/EFI/BOOT
-mcopy -i build/sanju-os-m2-alpha.img \
+dd if=/dev/zero of=build/sanju-os-m4-alpha.img bs=1M count=64 status=none
+mkfs.vfat -n SANJUOS build/sanju-os-m4-alpha.img >/dev/null
+mmd -i build/sanju-os-m4-alpha.img ::/EFI ::/EFI/BOOT
+mcopy -i build/sanju-os-m4-alpha.img \
   build/esp/EFI/BOOT/BOOTX64.EFI \
   ::/EFI/BOOT/BOOTX64.EFI
 
-echo "Created build/sanju-os-m2-alpha.img"
+echo "Created build/sanju-os-m4-alpha.img"

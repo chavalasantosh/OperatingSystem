@@ -50,13 +50,18 @@ if [[ "$qemu_status" -ne 33 ]]; then
   exit 1
 fi
 
-grep -Fq "Milestone M2: CPU protection and early memory management." build/qemu-debug.log
+grep -Fq "Milestone M4: interrupt-driven runtime and interactive kernel environment." build/qemu-debug.log
 grep -Fq "Protected kernel stack: active" build/qemu-debug.log
-grep -Fq "GDT: active" build/qemu-debug.log
-grep -Fq "TSS: active" build/qemu-debug.log
 grep -Fq "IDT exception handling: active" build/qemu-debug.log
-grep -Fq "Breakpoint exception self-test: active" build/qemu-debug.log
-grep -Fq "M2 core kernel gate: passed" build/qemu-debug.log
+grep -Fq "PIT timer interrupts: active" build/qemu-debug.log
+grep -Fq "PS/2 keyboard interrupt path: active" build/qemu-debug.log
+grep -Fq "Round-robin scheduler: active" build/qemu-debug.log
+grep -Fq "Interactive kernel shell: active" build/qemu-debug.log
+grep -Fq "RAM filesystem: active" build/qemu-debug.log
+grep -Fq "M4 interactive runtime gate: passed" build/qemu-debug.log
+grep -Fq "SanjuOS kernel shell ready." build/qemu-debug.log
+grep -Fq "welcome.txt" build/qemu-debug.log
+grep -Fq "runtime-ok" build/qemu-debug.log
 
 echo "QEMU smoke test passed."
 cat build/qemu-debug.log

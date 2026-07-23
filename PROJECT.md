@@ -3,18 +3,25 @@
 - Working name: SanjuOS
 - Start date: 2026-07-21
 - Product owner: Sanju
-- Initial architecture: x86-64
-- Initial firmware: UEFI 2.x
-- Primary implementation language: Rust 2024
-- Delivery model: two-week Agile sprints within a gated SDLC
-- Current checkpoint: 0.0.2-prealpha / M2-alpha implementation
-- Accepted release: M1 kernel-ownership gate
+- Architecture: x86-64
+- Firmware: UEFI 2.x
+- Primary language: Rust 2024
+- Current checkpoint: 0.0.4-prealpha / M4-alpha
+- Accepted releases: M1 and M2
 - Deployment policy: QEMU only until physical-install safety gates pass
 
 ## Mission
 
-Develop an independent desktop operating system through small, demonstrable, secure increments, ultimately targeting one supported laptop with a polished desktop and isolated AI-native services.
+Develop an independent desktop operating system with a secure Rust-first kernel, modern user environment, and later AI-native services.
 
-## Immediate objective
+## Delivery policy
 
-Pass all M2 quality and QEMU gates for the protected kernel stack, GDT/TSS/IDT, exception self-test, physical frame allocator, and bootstrap heap. After acceptance, begin M3 timer interrupts, keyboard input, cooperative scheduling, and an interactive kernel shell.
+Development is grouped into major milestone batches. Small formatting or CI corrections are accumulated and shipped with the next substantial batch rather than creating separate delivery cycles.
+
+## Current objective
+
+Pass the combined M3/M4 quality and QEMU gates for timer and keyboard interrupts, scheduler foundations, interactive shell, and RAM filesystem.
+
+## Next major objective
+
+M5 will take ownership of page tables, add guarded virtual address spaces and a reusable kernel allocator, enter ring 3, define the syscall ABI, and load the first user executable.

@@ -3,7 +3,7 @@
 use core::arch::{asm, global_asm};
 use core::mem::size_of;
 use core::ptr::{addr_of, addr_of_mut};
-use core::sync::atomic::{AtomicU8, Ordering};
+use core::sync::atomic::{AtomicU8, AtomicU64, AtomicUsize, Ordering};
 
 const KERNEL_CODE_SELECTOR: u16 = 0x08;
 const KERNEL_DATA_SELECTOR: u16 = 0x10;
@@ -12,6 +12,21 @@ const DOUBLE_FAULT_IST: u8 = 1;
 const KERNEL_STACK_SIZE: usize = 64 * 1024;
 const DOUBLE_FAULT_STACK_SIZE: usize = 32 * 1024;
 const IDT_ENTRY_COUNT: usize = 256;
+const PIC_MASTER_COMMAND: u16 = 0x20;
+const PIC_MASTER_DATA: u16 = 0x21;
+const PIC_SLAVE_COMMAND: u16 = 0xa0;
+const PIC_SLAVE_DATA: u16 = 0xa1;
+const PIC_EOI: u8 = 0x20;
+const PIC_MASTER_VECTOR_OFFSET: u8 = 32;
+const PIC_SLAVE_VECTOR_OFFSET: u8 = 40;
+const TIMER_VECTOR: usize = 32;
+const KEYBOARD_VECTOR: usize = 33;
+const PIT_COMMAND: u16 = 0x43;
+const PIT_CHANNEL_ZERO: u16 = 0x40;
+const PIT_INPUT_HZ: u32 = 1_193_182;
+pub const TIMER_HZ: u64 = 100;
+const KEYBOARD_DATA: u16 = 0x60;
+const SCANCODE_QUEUE_CAPACITY: usize = 256;
 
 #[repr(C, align(16))]
 struct Stack([u8; KERNEL_STACK_SIZE]);
@@ -96,6 +111,13 @@ impl IdtEntry {
 static mut TSS: TaskStateSegment = TaskStateSegment::new();
 static mut GDT: [u64; 5] = [0; 5];
 static mut IDT: [IdtEntry; IDT_ENTRY_COUNT] = [IdtEntry::missing(); IDT_ENTRY_COUNT];
+static mut SCANCODE_QUEUE: [u8; SCANCODE_QUEUE_CAPACITY] = [0; SCANCODE_QUEUE_CAPACITY];
+static SCANCODE_HEAD: AtomicUsize = AtomicUsize::new(0);
+static SCANCODE_TAIL: AtomicUsize = AtomicUsize::new(0);
+static SCANCODE_DROPPED: AtomicU64 = AtomicU64::new(0);
+static TIMER_TICKS: AtomicU64 = AtomicU64::new(0);
+static KEYBOARD_IRQS: AtomicU64 = AtomicU64::new(0);
+static TEST_SCANCODE: AtomicU8 = AtomicU8::new(0);
 
 #[unsafe(no_mangle)]
 pub static SANJU_BREAKPOINT_SEEN: AtomicU8 = AtomicU8::new(0);
@@ -111,9 +133,56 @@ pub struct CpuProtectionReport {
     pub breakpoint_self_test_passed: bool,
 }
 
+/// Evidence that the interrupt-driven M3 runtime is active.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct InterruptRuntimeReport {
+    pub timer_interrupts_active: bool,
+    pub timer_ticks: u64,
+    pub timer_hz: u64,
+    pub keyboard_interrupt_path_active: bool,
+    pub keyboard_irqs: u64,
+    pub dropped_scancodes: u64,
+}
+
 global_asm!(
     r#"
     .section .text
+
+    .macro SANJU_PUSH_REGISTERS
+        push rax
+        push rcx
+        push rdx
+        push rbx
+        push rbp
+        push rsi
+        push rdi
+        push r8
+        push r9
+        push r10
+        push r11
+        push r12
+        push r13
+        push r14
+        push r15
+    .endm
+
+    .macro SANJU_POP_REGISTERS
+        pop r15
+        pop r14
+        pop r13
+        pop r12
+        pop r11
+        pop r10
+        pop r9
+        pop r8
+        pop rdi
+        pop rsi
+        pop rbp
+        pop rbx
+        pop rdx
+        pop rcx
+        pop rax
+    .endm
 
     .global sanju_breakpoint_stub
 sanju_breakpoint_stub:
@@ -152,6 +221,30 @@ sanju_page_fault_stub:
     sub rsp, 32
     call sanju_fatal_exception_dispatch
     ud2
+
+    .global sanju_timer_interrupt_stub
+sanju_timer_interrupt_stub:
+    SANJU_PUSH_REGISTERS
+    mov r12, rsp
+    and rsp, -16
+    sub rsp, 32
+    cld
+    call sanju_timer_interrupt_dispatch
+    mov rsp, r12
+    SANJU_POP_REGISTERS
+    iretq
+
+    .global sanju_keyboard_interrupt_stub
+sanju_keyboard_interrupt_stub:
+    SANJU_PUSH_REGISTERS
+    mov r12, rsp
+    and rsp, -16
+    sub rsp, 32
+    cld
+    call sanju_keyboard_interrupt_dispatch
+    mov rsp, r12
+    SANJU_POP_REGISTERS
+    iretq
 "#
 );
 
@@ -160,9 +253,11 @@ unsafe extern "C" {
     fn sanju_double_fault_stub();
     fn sanju_general_protection_stub();
     fn sanju_page_fault_stub();
+    fn sanju_timer_interrupt_stub();
+    fn sanju_keyboard_interrupt_stub();
 }
 
-/// Moves execution to the statically reserved M2 kernel stack.
+/// Moves execution to the statically reserved kernel stack.
 ///
 /// # Safety
 ///
@@ -176,6 +271,7 @@ pub unsafe fn switch_to_kernel_stack(entry: extern "efiapi" fn() -> !) -> ! {
     // home area satisfies the x86-64 UEFI calling convention before the call.
     unsafe {
         asm!(
+            "cli",
             "mov rsp, {stack_top}",
             "and rsp, -16",
             "sub rsp, 32",
@@ -189,17 +285,17 @@ pub unsafe fn switch_to_kernel_stack(entry: extern "efiapi" fn() -> !) -> ! {
     }
 }
 
-/// Installs the GDT, TSS, protected exception stacks, and initial IDT.
+/// Installs the GDT, TSS, protected exception stacks, and IDT.
 ///
 /// # Safety
 ///
 /// The caller must execute at x86-64 kernel privilege after switching to the
-/// dedicated kernel stack. Interrupts must remain disabled until a complete
-/// interrupt-controller policy is installed.
+/// dedicated kernel stack. Interrupts must remain disabled until
+/// [`initialize_interrupt_runtime`] installs the interrupt controllers.
 #[must_use]
 pub unsafe fn initialize() -> CpuProtectionReport {
     // SAFETY: The caller owns early CPU initialization and no other core can
-    // access these tables during the single-core M2 boot path.
+    // access these tables during the single-core boot path.
     unsafe {
         install_gdt_and_tss();
         install_idt();
@@ -218,6 +314,95 @@ pub unsafe fn initialize() -> CpuProtectionReport {
         tss_active: true,
         idt_active: true,
         breakpoint_self_test_passed: SANJU_BREAKPOINT_SEEN.load(Ordering::SeqCst) == 1,
+    }
+}
+
+/// Configures the legacy PIC, PIT timer, and PS/2 keyboard IRQ path.
+///
+/// # Safety
+///
+/// Must run once after [`initialize`] on the bootstrap processor while no other
+/// core or driver accesses the interrupt-controller or PIT ports.
+#[must_use]
+pub unsafe fn initialize_interrupt_runtime() -> InterruptRuntimeReport {
+    TIMER_TICKS.store(0, Ordering::SeqCst);
+    KEYBOARD_IRQS.store(0, Ordering::SeqCst);
+    SCANCODE_HEAD.store(0, Ordering::SeqCst);
+    SCANCODE_TAIL.store(0, Ordering::SeqCst);
+    SCANCODE_DROPPED.store(0, Ordering::SeqCst);
+
+    // SAFETY: Single-core bootstrap owns the PIC and PIT programming sequence.
+    unsafe {
+        remap_and_unmask_pic();
+        configure_pit();
+        asm!("sti", options(nomem, nostack, preserves_flags));
+    }
+
+    let start = timer_ticks();
+    while timer_ticks().wrapping_sub(start) < 5 {
+        // SAFETY: Interrupts are enabled and IRQ0 is unmasked, so HLT resumes on
+        // the next PIT tick.
+        unsafe {
+            asm!("hlt", options(nomem, nostack));
+        }
+    }
+
+    TEST_SCANCODE.store(0x1c, Ordering::Release);
+    // SAFETY: Vector 33 is installed as the keyboard IRQ gate. The dispatcher
+    // consumes the injected Enter scancode before touching the controller port.
+    unsafe {
+        asm!("int 0x21", options(nomem, nostack));
+    }
+    let keyboard_self_test_passed = pop_scancode() == Some(0x1c);
+
+    InterruptRuntimeReport {
+        timer_interrupts_active: timer_ticks() > start,
+        timer_ticks: timer_ticks(),
+        timer_hz: TIMER_HZ,
+        keyboard_interrupt_path_active: keyboard_self_test_passed,
+        keyboard_irqs: keyboard_irqs(),
+        dropped_scancodes: SCANCODE_DROPPED.load(Ordering::Acquire),
+    }
+}
+
+/// Returns the number of PIT interrupts handled since initialization.
+#[must_use]
+pub fn timer_ticks() -> u64 {
+    TIMER_TICKS.load(Ordering::Acquire)
+}
+
+/// Returns the number of keyboard interrupts handled since initialization.
+#[must_use]
+pub fn keyboard_irqs() -> u64 {
+    KEYBOARD_IRQS.load(Ordering::Acquire)
+}
+
+/// Removes one scancode from the single-producer/single-consumer IRQ queue.
+#[must_use]
+pub fn pop_scancode() -> Option<u8> {
+    let tail = SCANCODE_TAIL.load(Ordering::Relaxed);
+    let head = SCANCODE_HEAD.load(Ordering::Acquire);
+    if tail == head {
+        return None;
+    }
+
+    // SAFETY: `tail` is within the fixed queue and only the kernel consumer
+    // reads this slot before publishing the advanced tail.
+    let scancode = unsafe {
+        addr_of!(SCANCODE_QUEUE)
+            .cast::<u8>()
+            .add(tail)
+            .read()
+    };
+    SCANCODE_TAIL.store((tail + 1) % SCANCODE_QUEUE_CAPACITY, Ordering::Release);
+    Some(scancode)
+}
+
+/// Halts until the next enabled interrupt.
+pub fn halt_until_interrupt() {
+    // SAFETY: The interrupt runtime is initialized before this helper is used.
+    unsafe {
+        asm!("hlt", options(nomem, nostack));
     }
 }
 
@@ -291,6 +476,9 @@ unsafe fn install_idt() {
     idt[8] = IdtEntry::interrupt_gate(handler_address(sanju_double_fault_stub), DOUBLE_FAULT_IST);
     idt[13] = IdtEntry::interrupt_gate(handler_address(sanju_general_protection_stub), 0);
     idt[14] = IdtEntry::interrupt_gate(handler_address(sanju_page_fault_stub), 0);
+    idt[TIMER_VECTOR] = IdtEntry::interrupt_gate(handler_address(sanju_timer_interrupt_stub), 0);
+    idt[KEYBOARD_VECTOR] =
+        IdtEntry::interrupt_gate(handler_address(sanju_keyboard_interrupt_stub), 0);
 
     // SAFETY: Early boot has exclusive ownership of the static IDT.
     unsafe {
@@ -305,6 +493,87 @@ unsafe fn install_idt() {
     // SAFETY: `idtr` references the fully initialized static IDT.
     unsafe {
         asm!("lidt [{idtr}]", idtr = in(reg) addr_of!(idtr), options(readonly, nostack));
+    }
+}
+
+unsafe fn remap_and_unmask_pic() {
+    // SAFETY: The caller owns the legacy PIC programming sequence.
+    unsafe {
+        outb(PIC_MASTER_COMMAND, 0x11);
+        io_wait();
+        outb(PIC_SLAVE_COMMAND, 0x11);
+        io_wait();
+        outb(PIC_MASTER_DATA, PIC_MASTER_VECTOR_OFFSET);
+        io_wait();
+        outb(PIC_SLAVE_DATA, PIC_SLAVE_VECTOR_OFFSET);
+        io_wait();
+        outb(PIC_MASTER_DATA, 0x04);
+        io_wait();
+        outb(PIC_SLAVE_DATA, 0x02);
+        io_wait();
+        outb(PIC_MASTER_DATA, 0x01);
+        io_wait();
+        outb(PIC_SLAVE_DATA, 0x01);
+        io_wait();
+        outb(PIC_MASTER_DATA, 0xfc);
+        outb(PIC_SLAVE_DATA, 0xff);
+    }
+}
+
+#[allow(clippy::cast_possible_truncation)]
+unsafe fn configure_pit() {
+    let divisor = PIT_INPUT_HZ / 100;
+    // SAFETY: The caller owns PIT channel zero and has installed IRQ0.
+    unsafe {
+        outb(PIT_COMMAND, 0x36);
+        outb(PIT_CHANNEL_ZERO, divisor as u8);
+        outb(PIT_CHANNEL_ZERO, (divisor >> 8) as u8);
+    }
+}
+
+fn enqueue_scancode(scancode: u8) {
+    let head = SCANCODE_HEAD.load(Ordering::Relaxed);
+    let next = (head + 1) % SCANCODE_QUEUE_CAPACITY;
+    if next == SCANCODE_TAIL.load(Ordering::Acquire) {
+        SCANCODE_DROPPED.fetch_add(1, Ordering::Relaxed);
+        return;
+    }
+
+    // SAFETY: The IRQ handler is the sole producer and writes only the current
+    // head slot before publishing the new head with release ordering.
+    unsafe {
+        addr_of_mut!(SCANCODE_QUEUE)
+            .cast::<u8>()
+            .add(head)
+            .write(scancode);
+    }
+    SCANCODE_HEAD.store(next, Ordering::Release);
+}
+
+#[unsafe(no_mangle)]
+extern "efiapi" fn sanju_timer_interrupt_dispatch() {
+    TIMER_TICKS.fetch_add(1, Ordering::Relaxed);
+    // SAFETY: IRQ0 is serviced by the master PIC.
+    unsafe {
+        outb(PIC_MASTER_COMMAND, PIC_EOI);
+    }
+}
+
+#[unsafe(no_mangle)]
+extern "efiapi" fn sanju_keyboard_interrupt_dispatch() {
+    let injected = TEST_SCANCODE.swap(0, Ordering::AcqRel);
+    let scancode = if injected == 0 {
+        // SAFETY: IRQ1 indicates the keyboard controller has a data byte.
+        unsafe { inb(KEYBOARD_DATA) }
+    } else {
+        injected
+    };
+
+    enqueue_scancode(scancode);
+    KEYBOARD_IRQS.fetch_add(1, Ordering::Relaxed);
+    // SAFETY: IRQ1 is serviced by the master PIC.
+    unsafe {
+        outb(PIC_MASTER_COMMAND, PIC_EOI);
     }
 }
 
@@ -385,13 +654,13 @@ fn debug_byte(byte: u8) {
     const COM1: u16 = 0x03f8;
     const LINE_STATUS: u16 = COM1 + 5;
     for _ in 0..100_000 {
-        // SAFETY: COM1 is the configured M2 early serial device.
+        // SAFETY: COM1 is the configured early serial device.
         if unsafe { inb(LINE_STATUS) } & 0x20 != 0 {
             break;
         }
         core::hint::spin_loop();
     }
-    // SAFETY: COM1 is the configured M2 early serial device.
+    // SAFETY: COM1 is the configured early serial device.
     unsafe {
         outb(COM1, byte);
     }
@@ -418,6 +687,13 @@ fn halt() -> ! {
         unsafe {
             asm!("cli", "hlt", options(nomem, nostack));
         }
+    }
+}
+
+unsafe fn io_wait() {
+    // SAFETY: Port 0x80 is the conventional POST delay port.
+    unsafe {
+        outb(0x80, 0);
     }
 }
 
