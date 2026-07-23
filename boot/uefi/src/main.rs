@@ -399,19 +399,13 @@ extern "efiapi" fn sanju_m4_kernel_entry() -> ! {
         timer_hz: cpu::TIMER_HZ,
         keyboard_irqs: cpu::keyboard_irqs(),
         usable_frames,
-        allocated_frames: usize::try_from(frame_allocator.allocated_frames())
-            .unwrap_or(usize::MAX),
+        allocated_frames: usize::try_from(frame_allocator.allocated_frames()).unwrap_or(usize::MAX),
         scheduler_tasks: scheduler_stats.task_count,
         scheduler_switches: scheduler_stats.context_switches,
         scheduler_dispatches: scheduler_stats.dispatches,
     };
     for byte in b"version\n" {
-        shell.feed_byte(
-            *byte,
-            &mut null_console,
-            &mut ramfs,
-            &self_test_environment,
-        );
+        shell.feed_byte(*byte, &mut null_console, &mut ramfs, &self_test_environment);
     }
 
     let report = M4Report {
@@ -427,8 +421,7 @@ extern "efiapi" fn sanju_m4_kernel_entry() -> ! {
         keyboard_irqs: interrupt_report.keyboard_irqs,
         keyboard_scancodes_dropped: interrupt_report.dropped_scancodes,
         usable_frames,
-        allocated_frames: usize::try_from(frame_allocator.allocated_frames())
-            .unwrap_or(usize::MAX),
+        allocated_frames: usize::try_from(frame_allocator.allocated_frames()).unwrap_or(usize::MAX),
         heap_allocations: heap.allocations(),
         heap_remaining_bytes: heap.remaining_bytes(),
         scheduler_active: scheduler_ready && scheduler_stats.dispatches > 0,

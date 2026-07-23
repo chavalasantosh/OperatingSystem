@@ -119,11 +119,7 @@ impl KeyboardDecoder {
 }
 
 const fn select(condition: bool, normal: u8, alternate: u8) -> u8 {
-    if condition {
-        alternate
-    } else {
-        normal
-    }
+    if condition { alternate } else { normal }
 }
 
 #[cfg(test)]

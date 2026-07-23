@@ -1,0 +1,2348 @@
+From b3448538ed67e12505b047fe79817db7c2d86cfe Mon Sep 17 00:00:00 2001
+From: Santosh Chavala <chavalasantosh@users.noreply.github.com>
+Date: Thu, 23 Jul 2026 20:58:35 +0000
+Subject: [PATCH] Implement M3-M4 interrupt runtime, scheduler, shell, and
+ RAMFS
+
+---
+ CHANGELOG.md                                  |  20 ++
+ Cargo.lock                                    |   4 +-
+ PROJECT.md                                    |  25 +-
+ README.md                                     |  97 ++----
+ SOURCE_MANIFEST.sha256                        |  36 ++-
+ boot/uefi/Cargo.toml                          |   2 +-
+ boot/uefi/src/cpu.rs                          | 292 +++++++++++++++++-
+ boot/uefi/src/main.rs                         | 137 +++++++-
+ .../adr/0007-interrupt-runtime-shell-ramfs.md |  13 +
+ docs/process/BACKLOG.md                       |  58 ++--
+ docs/process/SPRINT_3_4.md                    |  13 +
+ docs/testing/M4_VALIDATION.md                 |  14 +
+ kernel/Cargo.toml                             |   2 +-
+ kernel/src/fs.rs                              | 185 +++++++++++
+ kernel/src/input.rs                           | 151 +++++++++
+ kernel/src/lib.rs                             | 165 +++++++---
+ kernel/src/scheduler.rs                       | 183 +++++++++++
+ kernel/src/shell.rs                           | 259 ++++++++++++++++
+ scripts/image.sh                              |  12 +-
+ scripts/smoke-test.sh                         |  15 +-
+ scripts/source-check.py                       |  28 +-
+ 21 files changed, 1508 insertions(+), 203 deletions(-)
+ create mode 100644 docs/adr/0007-interrupt-runtime-shell-ramfs.md
+ create mode 100644 docs/process/SPRINT_3_4.md
+ create mode 100644 docs/testing/M4_VALIDATION.md
+ create mode 100644 kernel/src/fs.rs
+ create mode 100644 kernel/src/input.rs
+ create mode 100644 kernel/src/scheduler.rs
+ create mode 100644 kernel/src/shell.rs
+
+diff --git a/CHANGELOG.md b/CHANGELOG.md
+index 91c73ad..2e04967 100644
+--- a/CHANGELOG.md
++++ b/CHANGELOG.md
+@@ -1,5 +1,25 @@
+ # Changelog
+ 
++## M4-alpha combined runtime implementation — 2026-07-24
++
++### Added
++
++- Legacy PIC remapping with IRQ0/IRQ1 policy and end-of-interrupt handling.
++- 100 Hz PIT timer with observable interrupt ticks.
++- PS/2 keyboard IRQ path, bounded lock-free scancode queue, and Set-1 decoder.
++- Fixed-capacity round-robin kernel task scheduler.
++- Allocation-free interactive shell with runtime diagnostics.
++- Writable RAM filesystem and shell commands for listing, reading, and writing files.
++- Scripted QEMU acceptance flow covering timer, keyboard vector, scheduler, shell, and RAMFS.
++
++### Delivery model
++
++M3 and M4 were intentionally combined into one major batch to reduce micro-commit and CI overhead.
++
++### Safety status
++
++Emulator-only. Physical installation remains unsupported.
++
+ ## M2-alpha implementation — 2026-07-24
+ 
+ ### Added
+diff --git a/Cargo.lock b/Cargo.lock
+index 5378145..6bb8de5 100644
+--- a/Cargo.lock
++++ b/Cargo.lock
+@@ -4,11 +4,11 @@ version = 4
+ 
+ [[package]]
+ name = "sanju-boot"
+-version = "0.0.2"
++version = "0.0.4"
+ dependencies = [
+  "sanju-kernel",
+ ]
+ 
+ [[package]]
+ name = "sanju-kernel"
+-version = "0.0.2"
++version = "0.0.4"
+diff --git a/PROJECT.md b/PROJECT.md
+index faca417..7f3baa9 100644
+--- a/PROJECT.md
++++ b/PROJECT.md
+@@ -3,18 +3,25 @@
+ - Working name: SanjuOS
+ - Start date: 2026-07-21
+ - Product owner: Sanju
+-- Initial architecture: x86-64
+-- Initial firmware: UEFI 2.x
+-- Primary implementation language: Rust 2024
+-- Delivery model: two-week Agile sprints within a gated SDLC
+-- Current checkpoint: 0.0.2-prealpha / M2-alpha implementation
+-- Accepted release: M1 kernel-ownership gate
++- Architecture: x86-64
++- Firmware: UEFI 2.x
++- Primary language: Rust 2024
++- Current checkpoint: 0.0.4-prealpha / M4-alpha
++- Accepted releases: M1 and M2
+ - Deployment policy: QEMU only until physical-install safety gates pass
+ 
+ ## Mission
+ 
+-Develop an independent desktop operating system through small, demonstrable, secure increments, ultimately targeting one supported laptop with a polished desktop and isolated AI-native services.
++Develop an independent desktop operating system with a secure Rust-first kernel, modern user environment, and later AI-native services.
+ 
+-## Immediate objective
++## Delivery policy
+ 
+-Pass all M2 quality and QEMU gates for the protected kernel stack, GDT/TSS/IDT, exception self-test, physical frame allocator, and bootstrap heap. After acceptance, begin M3 timer interrupts, keyboard input, cooperative scheduling, and an interactive kernel shell.
++Development is grouped into major milestone batches. Small formatting or CI corrections are accumulated and shipped with the next substantial batch rather than creating separate delivery cycles.
++
++## Current objective
++
++Pass the combined M3/M4 quality and QEMU gates for timer and keyboard interrupts, scheduler foundations, interactive shell, and RAM filesystem.
++
++## Next major objective
++
++M5 will take ownership of page tables, add guarded virtual address spaces and a reusable kernel allocator, enter ring 3, define the syscall ABI, and load the first user executable.
+diff --git a/README.md b/README.md
+index fbded16..f42eafa 100644
+--- a/README.md
++++ b/README.md
+@@ -1,99 +1,66 @@
+ # SanjuOS
+ 
+-SanjuOS is a long-term project to build an independent, secure, AI-native desktop operating system. It is **not** a Linux distribution. The project begins with a minimal x86-64 UEFI boot path and a freestanding Rust core, then grows through tested increments toward processes, drivers, graphics, user space, applications, installation, updates, and laptop-specific hardware support.
++SanjuOS is an independent, Rust-first desktop operating-system project. It is not a Linux distribution. Development proceeds through emulator-verified kernel milestones before any physical-disk work.
+ 
+-## Current checkpoint: M2-alpha — Protected Core Kernel
++## Current checkpoint: M4-alpha — Interactive Runtime
+ 
+-M1 is verified in GitHub Actions/QEMU. The M2 implementation adds:
++M1 and M2 are QEMU-verified. This combined M3/M4 batch adds:
+ 
+-- a dedicated 64 KiB kernel stack and one-way firmware-stack transition;
+-- a long-mode GDT and TSS;
+-- a dedicated double-fault IST stack;
+-- an IDT for breakpoint, double fault, general protection, and page fault;
+-- a recoverable breakpoint exception self-test;
+-- fatal page-fault diagnostics including CR2;
+-- a physical frame allocator over UEFI conventional memory;
+-- a 256 KiB aligned bootstrap bump heap;
+-- host tests, structural ABI checks, and a deterministic QEMU gate.
++- remapped 8259 PIC interrupt controllers;
++- a 100 Hz PIT timer and IRQ0 accounting;
++- an IRQ1 PS/2 keyboard path with a lock-free scancode queue;
++- Set-1 keyboard decoding for an interactive command line;
++- a fixed-capacity round-robin kernel-task scheduler;
++- an allocation-free interactive kernel shell;
++- a writable in-memory filesystem with `ls`, `cat`, and `write`;
++- automated timer, keyboard-vector, scheduler, shell, and RAMFS acceptance checks.
+ 
+-Expected M2 smoke output:
++Expected smoke output includes:
+ 
+ ```text
+ SanjuOS
+-Milestone M2: CPU protection and early memory management.
+-Architecture: x86_64
+-Firmware: UEFI
+-Firmware boot services: exited
+-Protected kernel stack: active
+-GDT: active
+-TSS: active
+-IDT exception handling: active
+-Breakpoint exception self-test: active
+-Usable physical frames: <firmware-dependent count>
+-Allocated test frames: 3
+-Bootstrap heap allocations: 1
+-M2 core kernel gate: passed
+-Next gate: timer interrupts, keyboard, scheduler, and shell
++Milestone M4: interrupt-driven runtime and interactive kernel environment.
++PIT timer interrupts: active
++PS/2 keyboard interrupt path: active
++Round-robin scheduler: active
++Interactive kernel shell: active
++RAM filesystem: active
++M4 interactive runtime gate: passed
++SanjuOS kernel shell ready.
+ ```
+ 
+-## Engineering principles
++## Shell commands
+ 
+-1. Correctness before feature count.
+-2. Memory-safe Rust by default; every `unsafe` block requires a documented invariant.
+-3. Minimal dependencies in the trusted boot path.
+-4. Emulator-first validation before physical-hardware experiments.
+-5. Reproducible builds and automated quality gates.
+-6. Architecture decisions recorded as ADRs.
+-7. Two-week Agile sprints inside a gated SDLC.
+-8. Security and recovery are product features, not final-stage additions.
+-
+-## Prerequisites
++```text
++help version uptime memory irq tasks ls cat write echo clear
++```
+ 
+-The reference environment is Ubuntu or Ubuntu under WSL2.
++Run interactively with:
+ 
+ ```bash
+-sudo apt update
+-sudo apt install -y build-essential make qemu-system-x86 ovmf mtools dosfstools
+-curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
+-source "$HOME/.cargo/env"
++make setup
++make run
+ ```
+ 
+-Then:
++Run all gates with:
+ 
+ ```bash
+-make setup
+ make source-check
+ make fmt
+ make lint
+ make test
+-make build
+ make smoke
+ ```
+ 
+-For an interactive emulator boot:
+-
+-```bash
+-make run
+-```
+-
+ ## Repository map
+ 
+ ```text
+-boot/uefi/          UEFI entry, x86-64 CPU setup, and early serial adapter
+-kernel/             Freestanding core, memory-map model, frame and heap allocators
++boot/uefi/          UEFI entry, CPU tables, PIC/PIT, IRQ handlers, serial adapter
++kernel/             Core models, memory, scheduler, keyboard decoder, shell, RAMFS
+ scripts/            Build, image, QEMU, source-check, and test automation
+-docs/requirements/  Product and system requirements
+-docs/architecture/  System boundaries and technical design
+-docs/adr/           Architecture Decision Records
+-docs/security/      Threat model and secure-development rules
+-docs/testing/       Test strategy and release gates
+-docs/process/       Agile, SDLC, backlog, and definition of done
++docs/               Requirements, architecture, ADRs, testing, security, and process
+ ```
+ 
+ ## Safety
+ 
+-Do not install this project onto a physical disk. M2-alpha is emulator-only. Physical-hardware deployment begins only after storage safety, recovery, boot fallback, page-table ownership, and device-specific validation gates exist.
+-
+-## Verification status
+-
+-M1 has passed the QEMU smoke gate. M2 source and ABI checks can run without Rust; M2 acceptance still requires the complete GitHub Actions quality and QEMU jobs to pass from a clean checkout.
++M4-alpha remains emulator-only. Do not install it on a physical disk. The next major gate establishes page-table ownership, guarded virtual memory, ring-3 user mode, syscalls, and executable loading.
+diff --git a/SOURCE_MANIFEST.sha256 b/SOURCE_MANIFEST.sha256
+index 3eb5f44..6cf4f2b 100644
+--- a/SOURCE_MANIFEST.sha256
++++ b/SOURCE_MANIFEST.sha256
+@@ -2,17 +2,17 @@
+ 0ea4431ec1d7ed152d303a763534f9f583fed740f6d25d62fcf5f497b02d7dcb  ./.editorconfig
+ 2561cb151219c33e387c28a09c9909ccffc6132e2a739d5c571b22369856ddad  ./.github/workflows/ci.yml
+ efd914eea2dd83a5a683d55cf7c7fbf811182b18a0f631f7adfb3ea1f8856bd6  ./.gitignore
+-6065fdb56f3652907ae42679e24f84ac57a12d6e7757f510143b3c8dd41f443b  ./CHANGELOG.md
++87b6f4e17a3f8ea05981eaf4d89ba28b65dd372ef257f0d327a44ce342daced3  ./CHANGELOG.md
+ fa978f37685c47c2209dc2c11e4bb7d278ab47a813b051d1b25ad66e3eafc770  ./CONTRIBUTING.md
+-e8a6948bf85aa207f26f1dd7dacc72e44b5a6a7169a4d7e7a08417fc7ebe30b2  ./Cargo.lock
++38573ed753bce7d8d03a11599cf86a3dd21f5309d6e3b4676da4822d1a0d7de6  ./Cargo.lock
+ fa606cd7240d5b31b7c7ae965671f27cedd99bd6bd5693b2a1127c7cf521de1c  ./Cargo.toml
+ 27a7e72dc397a3543b1ce93190ce9230d9f184e4d0c57a1b07a5c2bdf83c79fa  ./Makefile
+-96cfb04aff2721a489e4c88d816ad265fefad9c1a3d3fb2fa68f3a48190f45a0  ./PROJECT.md
+-158dcaef3b5ccfffecf9e02f6e105b51c20c78114529c7f82409b84c807fbce5  ./README.md
++9ec88303895c199f4520791e43c87ec1dd10f611b1e421f3c30c88163ac52c84  ./PROJECT.md
++3602f3998d722265a2b80dcc3fe82856aac73f2aa0f7a816658592bd2216baa1  ./README.md
+ 1ab4c9f09e95c0779b58e3e792ead2eeaa53291cc1804e405f7ec6635223383d  ./SECURITY.md
+-d374ad56e2bcf2c69e363e4de761411a94ed9329c4ce7dc8a2abcfe4185dafc7  ./boot/uefi/Cargo.toml
+-785d056e0f33803effbe302b2878bfbaf9bbcf5c7920c8fc2985ee19ef72f9b2  ./boot/uefi/src/cpu.rs
+-4d45245d02857b5d504c5105cd90cca88d94d1d55f8c588843ec12153d0bc4ac  ./boot/uefi/src/main.rs
++8f37d905bf97a4669f5fc84c93a6b711212719099d4784cf2aed44fe7714d364  ./boot/uefi/Cargo.toml
++2b65d8c012ee18d346e38cb9d434bd1549054d6f9ec382a087d40eeb7f941ccf  ./boot/uefi/src/cpu.rs
++627ddfc8c8a34eb62ea29519639fb962aaef1f86641c18dd6ff101e9be71318b  ./boot/uefi/src/main.rs
+ 7d11876ab13082c796a5a2af100ece7b713251c408e3c67b313cc51ed3a3d410  ./boot/uefi/src/serial.rs
+ 4b490a94642825c10c5876ab94d6e1390360ba754e9615735c649b64a5fea334  ./docs/adr/0001-rust-first.md
+ 2408920abe6ae8d6c3861f0bcfbe5c3cb362a444fc5104eb5d245fee9334a22d  ./docs/adr/0002-uefi-x86-64-first.md
+@@ -20,8 +20,9 @@ d374ad56e2bcf2c69e363e4de761411a94ed9329c4ce7dc8a2abcfe4185dafc7  ./boot/uefi/Ca
+ f43109fbbf5b5011c255385ae0736582643166c5c368a9e457f4e4ec7a6886db  ./docs/adr/0004-minimal-boot-dependencies.md
+ b1ba72a50176fcc0571e070936c9e809ad4c622ae96872f954a29c9365704ef0  ./docs/adr/0005-firmware-exit-memory-map.md
+ 91c63e7aa8bec8e689504841bae233cc9f877377140eaa41e4faf164015458e3  ./docs/adr/0006-m2-cpu-memory-foundation.md
++4dd429a2bcce34d6303e6056504103744ed0c77cb5c313560123294b387bbdf5  ./docs/adr/0007-interrupt-runtime-shell-ramfs.md
+ 9712cbe7d112dbaf698065483815cdf8b25c841f796a76750016bac57310fad7  ./docs/architecture/SYSTEM_OVERVIEW.md
+-939e0a5303f1500363849c76180e959246e07281ac8972ca1f48977f63baa22e  ./docs/process/BACKLOG.md
++6a89632bbc26f0891889827d8fbe6746d90c01751928048a3034d6ff8592485a  ./docs/process/BACKLOG.md
+ fee8050e8dcc105d812af867282e410f229c2422e535add412d987b4ab70c890  ./docs/process/DEFINITION_OF_DONE.md
+ dcea11a6507afc3aaa04555ab479af6b5b4bd7797e457799ff2cae037edcd964  ./docs/process/ENVIRONMENT_NOTE.md
+ df922b7008e85b5f663b866fd8a8d1b5f92da380ec61dc5088c8627cb097c46a  ./docs/process/RISK_REGISTER.md
+@@ -29,23 +30,30 @@ df922b7008e85b5f663b866fd8a8d1b5f92da380ec61dc5088c8627cb097c46a  ./docs/process
+ 53005001ed5a64131b96e384f02a038f7dc3f8af0b5bcfcfbe726544c196ca2e  ./docs/process/SPRINT_0.md
+ 39021ee209e0fe5c981c3a51a5bcbcc9b56551dd8d9e09e87a2498d029d6ce3a  ./docs/process/SPRINT_1.md
+ f1775d368dea5e3970dc3449e2b2431dc4b46c8d3517461e82f9b343575c73ca  ./docs/process/SPRINT_2.md
++579ad75483f45f34b0111179da17abf06b752d8a6df6c98b8467b03db77d1cc6  ./docs/process/SPRINT_3_4.md
+ 695d5c8f71075cc6f377a12c222d2b95e010192a7c6a428d6f3e830dcab8c7c2  ./docs/requirements/PRODUCT_REQUIREMENTS.md
+ 7177041b9f85ecb5329d790799945651a4cdbc9264e2c726c7eecc3f8211885c  ./docs/security/THREAT_MODEL.md
+ 96c4481cfdf866564988c8a590a7c9f10b56df370ed084d245c8e7d54258cf03  ./docs/testing/M2_VALIDATION.md
++2e5a291acec6351b594166f9cb8a6107dc47fd4c421557fbafbfaf4eef3d9ff5  ./docs/testing/M4_VALIDATION.md
+ c61e3f72e4720e80acff4c82834f6bc93b14c9a4da069490b7054b454c194aa6  ./docs/testing/TEST_STRATEGY.md
+-44350dece794fa40e0070b13b27dc75e5ce460baffa0667e3e10a6eeecdf1686  ./kernel/Cargo.toml
+-d67548f6cf2d878cd5663fa5dbd386d33f8352ac2bb598995db14b41fd8b2f8c  ./kernel/src/lib.rs
+-70dc3a3172d47bceb6456e36dbeb65498e49cf45d05d261eb174d335961ad407  ./kernel/src/memory.rs
++83a2851c701cf4f90d00beba1954a5c6abfb67f05fbe996c56aa273eee1f2f3f  ./kernel/Cargo.toml
++4e949de738f727e4057e8ec1f6d72537c952a65a6802f498732eb4b68e131824  ./kernel/src/fs.rs
++2db8a50706a12cd9088fca9c40f54e8c69b87e9d01d582f7d3ebd726a7ed3f9e  ./kernel/src/input.rs
++ebcabf424cf3d0cdb3a4ae0e28c207ef3ceee41a5648249bc56f6c39c7490a20  ./kernel/src/lib.rs
++dc3b8e22e218b50e64bd35fe695c67b021cd0e28b2b2af8f6399f47e97857351  ./kernel/src/memory.rs
++18426c0070887453f9de8a816927fe2c2b3cec57e40f90ef152d67546a462ca3  ./kernel/src/scheduler.rs
++9eac1c98e99a205ae6f96fe356b12d509bf203107ee5ad70f013274a4ae35b6f  ./kernel/src/shell.rs
+ f62908b4a60f1133681a30fd8359d85ea022ad3f0670925a321937c3939597e9  ./rust-toolchain.toml
++d432c42f5185c80032fc3d4a5f7d341a8b327278cb0d08000811351f5cecc598  ./sanju-os-m2.patch
+ cd7c4d2ac3a81f614a8134661c0353e238ea19d4cb000bf98143a8e5f4a9a521  ./scripts/build-llvm-probe.sh
+ c26e150f860ee56bc77d7181d7ff3514b32615e17a21494c33c6a159108cb528  ./scripts/build-smoke.sh
+ 2906bb8debe2870d78b51b72fe33dfeb725cf2f6bffe03af8f8454ad9715c100  ./scripts/build.sh
+ f5e3a26817aecf454c61b0bb0ff5f86fd03d7a3fb0ece74c67f1913a4dd94a74  ./scripts/find-ovmf.sh
+-7bd776756cbdb1a7f214c35ad40ba0efcb9c2acd101e54c81c81218419ef7c15  ./scripts/image.sh
++e85217ff2bb904cd71503da030584920f9cd3d6146453dc0805bc15ebbcdf16b  ./scripts/image.sh
+ 02599ee29ce06f54a4cb6fdb4ff16880eabc06d31b6ff6511d9d73100dbee803  ./scripts/run-qemu.sh
+ ab7e005caf20319364e70b94897bf1c08ee43ef5115a8b902a8955079e35043d  ./scripts/setup.sh
+-3fba9ef72268cf45c7684cec15433d63cbc4f3527a4174cf1d1149463dcec29a  ./scripts/smoke-test.sh
+-e400c3af93aebb2cf1e20dbfd81bdb87425ac9619cb8267974639f70899a158f  ./scripts/source-check.py
++261b2387878a1f8c423200b225d8e7b789e04775ec96ffa2d4b350650569b8b0  ./scripts/smoke-test.sh
++75f49906d6af5c1e7bad54596f2258499639bda4ddadafed5e45747441c3aff6  ./scripts/source-check.py
+ 4cd8845ab8db1a1702165dcd7b777917804a285a06a5270226aff85e8a53280a  ./scripts/verify-llvm-probe.sh
+ 5ff24f8132b0ee21d0e54b7d1c91aefef56e3a49c55c25a3437e0f0a8b6b8d5f  ./verification/uefi-probe/README.md
+ 613a7ccaa0b692edca8b0f823d60874df86459fdfe6310ef863bc310be1a9deb  ./verification/uefi-probe/main.c
+diff --git a/boot/uefi/Cargo.toml b/boot/uefi/Cargo.toml
+index 4b86e79..8146e82 100644
+--- a/boot/uefi/Cargo.toml
++++ b/boot/uefi/Cargo.toml
+@@ -1,6 +1,6 @@
+ [package]
+ name = "sanju-boot"
+-version = "0.0.2"
++version = "0.0.4"
+ edition.workspace = true
+ rust-version.workspace = true
+ publish.workspace = true
+diff --git a/boot/uefi/src/cpu.rs b/boot/uefi/src/cpu.rs
+index 30e1f42..2d05b08 100644
+--- a/boot/uefi/src/cpu.rs
++++ b/boot/uefi/src/cpu.rs
+@@ -3,7 +3,7 @@
+ use core::arch::{asm, global_asm};
+ use core::mem::size_of;
+ use core::ptr::{addr_of, addr_of_mut};
+-use core::sync::atomic::{AtomicU8, Ordering};
++use core::sync::atomic::{AtomicU8, AtomicU64, AtomicUsize, Ordering};
+ 
+ const KERNEL_CODE_SELECTOR: u16 = 0x08;
+ const KERNEL_DATA_SELECTOR: u16 = 0x10;
+@@ -12,6 +12,21 @@ const DOUBLE_FAULT_IST: u8 = 1;
+ const KERNEL_STACK_SIZE: usize = 64 * 1024;
+ const DOUBLE_FAULT_STACK_SIZE: usize = 32 * 1024;
+ const IDT_ENTRY_COUNT: usize = 256;
++const PIC_MASTER_COMMAND: u16 = 0x20;
++const PIC_MASTER_DATA: u16 = 0x21;
++const PIC_SLAVE_COMMAND: u16 = 0xa0;
++const PIC_SLAVE_DATA: u16 = 0xa1;
++const PIC_EOI: u8 = 0x20;
++const PIC_MASTER_VECTOR_OFFSET: u8 = 32;
++const PIC_SLAVE_VECTOR_OFFSET: u8 = 40;
++const TIMER_VECTOR: usize = 32;
++const KEYBOARD_VECTOR: usize = 33;
++const PIT_COMMAND: u16 = 0x43;
++const PIT_CHANNEL_ZERO: u16 = 0x40;
++const PIT_INPUT_HZ: u32 = 1_193_182;
++pub const TIMER_HZ: u64 = 100;
++const KEYBOARD_DATA: u16 = 0x60;
++const SCANCODE_QUEUE_CAPACITY: usize = 256;
+ 
+ #[repr(C, align(16))]
+ struct Stack([u8; KERNEL_STACK_SIZE]);
+@@ -96,6 +111,13 @@ impl IdtEntry {
+ static mut TSS: TaskStateSegment = TaskStateSegment::new();
+ static mut GDT: [u64; 5] = [0; 5];
+ static mut IDT: [IdtEntry; IDT_ENTRY_COUNT] = [IdtEntry::missing(); IDT_ENTRY_COUNT];
++static mut SCANCODE_QUEUE: [u8; SCANCODE_QUEUE_CAPACITY] = [0; SCANCODE_QUEUE_CAPACITY];
++static SCANCODE_HEAD: AtomicUsize = AtomicUsize::new(0);
++static SCANCODE_TAIL: AtomicUsize = AtomicUsize::new(0);
++static SCANCODE_DROPPED: AtomicU64 = AtomicU64::new(0);
++static TIMER_TICKS: AtomicU64 = AtomicU64::new(0);
++static KEYBOARD_IRQS: AtomicU64 = AtomicU64::new(0);
++static TEST_SCANCODE: AtomicU8 = AtomicU8::new(0);
+ 
+ #[unsafe(no_mangle)]
+ pub static SANJU_BREAKPOINT_SEEN: AtomicU8 = AtomicU8::new(0);
+@@ -111,10 +133,57 @@ pub struct CpuProtectionReport {
+     pub breakpoint_self_test_passed: bool,
+ }
+ 
++/// Evidence that the interrupt-driven M3 runtime is active.
++#[derive(Clone, Copy, Debug, Eq, PartialEq)]
++pub struct InterruptRuntimeReport {
++    pub timer_interrupts_active: bool,
++    pub timer_ticks: u64,
++    pub timer_hz: u64,
++    pub keyboard_interrupt_path_active: bool,
++    pub keyboard_irqs: u64,
++    pub dropped_scancodes: u64,
++}
++
+ global_asm!(
+     r#"
+     .section .text
+ 
++    .macro SANJU_PUSH_REGISTERS
++        push rax
++        push rcx
++        push rdx
++        push rbx
++        push rbp
++        push rsi
++        push rdi
++        push r8
++        push r9
++        push r10
++        push r11
++        push r12
++        push r13
++        push r14
++        push r15
++    .endm
++
++    .macro SANJU_POP_REGISTERS
++        pop r15
++        pop r14
++        pop r13
++        pop r12
++        pop r11
++        pop r10
++        pop r9
++        pop r8
++        pop rdi
++        pop rsi
++        pop rbp
++        pop rbx
++        pop rdx
++        pop rcx
++        pop rax
++    .endm
++
+     .global sanju_breakpoint_stub
+ sanju_breakpoint_stub:
+     push rax
+@@ -152,6 +221,30 @@ sanju_page_fault_stub:
+     sub rsp, 32
+     call sanju_fatal_exception_dispatch
+     ud2
++
++    .global sanju_timer_interrupt_stub
++sanju_timer_interrupt_stub:
++    SANJU_PUSH_REGISTERS
++    mov r12, rsp
++    and rsp, -16
++    sub rsp, 32
++    cld
++    call sanju_timer_interrupt_dispatch
++    mov rsp, r12
++    SANJU_POP_REGISTERS
++    iretq
++
++    .global sanju_keyboard_interrupt_stub
++sanju_keyboard_interrupt_stub:
++    SANJU_PUSH_REGISTERS
++    mov r12, rsp
++    and rsp, -16
++    sub rsp, 32
++    cld
++    call sanju_keyboard_interrupt_dispatch
++    mov rsp, r12
++    SANJU_POP_REGISTERS
++    iretq
+ "#
+ );
+ 
+@@ -160,9 +253,11 @@ unsafe extern "C" {
+     fn sanju_double_fault_stub();
+     fn sanju_general_protection_stub();
+     fn sanju_page_fault_stub();
++    fn sanju_timer_interrupt_stub();
++    fn sanju_keyboard_interrupt_stub();
+ }
+ 
+-/// Moves execution to the statically reserved M2 kernel stack.
++/// Moves execution to the statically reserved kernel stack.
+ ///
+ /// # Safety
+ ///
+@@ -176,6 +271,7 @@ pub unsafe fn switch_to_kernel_stack(entry: extern "efiapi" fn() -> !) -> ! {
+     // home area satisfies the x86-64 UEFI calling convention before the call.
+     unsafe {
+         asm!(
++            "cli",
+             "mov rsp, {stack_top}",
+             "and rsp, -16",
+             "sub rsp, 32",
+@@ -189,17 +285,17 @@ pub unsafe fn switch_to_kernel_stack(entry: extern "efiapi" fn() -> !) -> ! {
+     }
+ }
+ 
+-/// Installs the GDT, TSS, protected exception stacks, and initial IDT.
++/// Installs the GDT, TSS, protected exception stacks, and IDT.
+ ///
+ /// # Safety
+ ///
+ /// The caller must execute at x86-64 kernel privilege after switching to the
+-/// dedicated kernel stack. Interrupts must remain disabled until a complete
+-/// interrupt-controller policy is installed.
++/// dedicated kernel stack. Interrupts must remain disabled until
++/// [`initialize_interrupt_runtime`] installs the interrupt controllers.
+ #[must_use]
+ pub unsafe fn initialize() -> CpuProtectionReport {
+     // SAFETY: The caller owns early CPU initialization and no other core can
+-    // access these tables during the single-core M2 boot path.
++    // access these tables during the single-core boot path.
+     unsafe {
+         install_gdt_and_tss();
+         install_idt();
+@@ -221,6 +317,95 @@ pub unsafe fn initialize() -> CpuProtectionReport {
+     }
+ }
+ 
++/// Configures the legacy PIC, PIT timer, and PS/2 keyboard IRQ path.
++///
++/// # Safety
++///
++/// Must run once after [`initialize`] on the bootstrap processor while no other
++/// core or driver accesses the interrupt-controller or PIT ports.
++#[must_use]
++pub unsafe fn initialize_interrupt_runtime() -> InterruptRuntimeReport {
++    TIMER_TICKS.store(0, Ordering::SeqCst);
++    KEYBOARD_IRQS.store(0, Ordering::SeqCst);
++    SCANCODE_HEAD.store(0, Ordering::SeqCst);
++    SCANCODE_TAIL.store(0, Ordering::SeqCst);
++    SCANCODE_DROPPED.store(0, Ordering::SeqCst);
++
++    // SAFETY: Single-core bootstrap owns the PIC and PIT programming sequence.
++    unsafe {
++        remap_and_unmask_pic();
++        configure_pit();
++        asm!("sti", options(nomem, nostack, preserves_flags));
++    }
++
++    let start = timer_ticks();
++    while timer_ticks().wrapping_sub(start) < 5 {
++        // SAFETY: Interrupts are enabled and IRQ0 is unmasked, so HLT resumes on
++        // the next PIT tick.
++        unsafe {
++            asm!("hlt", options(nomem, nostack));
++        }
++    }
++
++    TEST_SCANCODE.store(0x1c, Ordering::Release);
++    // SAFETY: Vector 33 is installed as the keyboard IRQ gate. The dispatcher
++    // consumes the injected Enter scancode before touching the controller port.
++    unsafe {
++        asm!("int 0x21", options(nomem, nostack));
++    }
++    let keyboard_self_test_passed = pop_scancode() == Some(0x1c);
++
++    InterruptRuntimeReport {
++        timer_interrupts_active: timer_ticks() > start,
++        timer_ticks: timer_ticks(),
++        timer_hz: TIMER_HZ,
++        keyboard_interrupt_path_active: keyboard_self_test_passed,
++        keyboard_irqs: keyboard_irqs(),
++        dropped_scancodes: SCANCODE_DROPPED.load(Ordering::Acquire),
++    }
++}
++
++/// Returns the number of PIT interrupts handled since initialization.
++#[must_use]
++pub fn timer_ticks() -> u64 {
++    TIMER_TICKS.load(Ordering::Acquire)
++}
++
++/// Returns the number of keyboard interrupts handled since initialization.
++#[must_use]
++pub fn keyboard_irqs() -> u64 {
++    KEYBOARD_IRQS.load(Ordering::Acquire)
++}
++
++/// Removes one scancode from the single-producer/single-consumer IRQ queue.
++#[must_use]
++pub fn pop_scancode() -> Option<u8> {
++    let tail = SCANCODE_TAIL.load(Ordering::Relaxed);
++    let head = SCANCODE_HEAD.load(Ordering::Acquire);
++    if tail == head {
++        return None;
++    }
++
++    // SAFETY: `tail` is within the fixed queue and only the kernel consumer
++    // reads this slot before publishing the advanced tail.
++    let scancode = unsafe {
++        addr_of!(SCANCODE_QUEUE)
++            .cast::<u8>()
++            .add(tail)
++            .read()
++    };
++    SCANCODE_TAIL.store((tail + 1) % SCANCODE_QUEUE_CAPACITY, Ordering::Release);
++    Some(scancode)
++}
++
++/// Halts until the next enabled interrupt.
++pub fn halt_until_interrupt() {
++    // SAFETY: The interrupt runtime is initialized before this helper is used.
++    unsafe {
++        asm!("hlt", options(nomem, nostack));
++    }
++}
++
+ unsafe fn install_gdt_and_tss() {
+     let tss = TaskStateSegment {
+         privilege_stack_table: [u64::try_from(kernel_stack_top()).unwrap_or(u64::MAX), 0, 0],
+@@ -291,6 +476,9 @@ unsafe fn install_idt() {
+     idt[8] = IdtEntry::interrupt_gate(handler_address(sanju_double_fault_stub), DOUBLE_FAULT_IST);
+     idt[13] = IdtEntry::interrupt_gate(handler_address(sanju_general_protection_stub), 0);
+     idt[14] = IdtEntry::interrupt_gate(handler_address(sanju_page_fault_stub), 0);
++    idt[TIMER_VECTOR] = IdtEntry::interrupt_gate(handler_address(sanju_timer_interrupt_stub), 0);
++    idt[KEYBOARD_VECTOR] =
++        IdtEntry::interrupt_gate(handler_address(sanju_keyboard_interrupt_stub), 0);
+ 
+     // SAFETY: Early boot has exclusive ownership of the static IDT.
+     unsafe {
+@@ -308,6 +496,87 @@ unsafe fn install_idt() {
+     }
+ }
+ 
++unsafe fn remap_and_unmask_pic() {
++    // SAFETY: The caller owns the legacy PIC programming sequence.
++    unsafe {
++        outb(PIC_MASTER_COMMAND, 0x11);
++        io_wait();
++        outb(PIC_SLAVE_COMMAND, 0x11);
++        io_wait();
++        outb(PIC_MASTER_DATA, PIC_MASTER_VECTOR_OFFSET);
++        io_wait();
++        outb(PIC_SLAVE_DATA, PIC_SLAVE_VECTOR_OFFSET);
++        io_wait();
++        outb(PIC_MASTER_DATA, 0x04);
++        io_wait();
++        outb(PIC_SLAVE_DATA, 0x02);
++        io_wait();
++        outb(PIC_MASTER_DATA, 0x01);
++        io_wait();
++        outb(PIC_SLAVE_DATA, 0x01);
++        io_wait();
++        outb(PIC_MASTER_DATA, 0xfc);
++        outb(PIC_SLAVE_DATA, 0xff);
++    }
++}
++
++#[allow(clippy::cast_possible_truncation)]
++unsafe fn configure_pit() {
++    let divisor = PIT_INPUT_HZ / 100;
++    // SAFETY: The caller owns PIT channel zero and has installed IRQ0.
++    unsafe {
++        outb(PIT_COMMAND, 0x36);
++        outb(PIT_CHANNEL_ZERO, divisor as u8);
++        outb(PIT_CHANNEL_ZERO, (divisor >> 8) as u8);
++    }
++}
++
++fn enqueue_scancode(scancode: u8) {
++    let head = SCANCODE_HEAD.load(Ordering::Relaxed);
++    let next = (head + 1) % SCANCODE_QUEUE_CAPACITY;
++    if next == SCANCODE_TAIL.load(Ordering::Acquire) {
++        SCANCODE_DROPPED.fetch_add(1, Ordering::Relaxed);
++        return;
++    }
++
++    // SAFETY: The IRQ handler is the sole producer and writes only the current
++    // head slot before publishing the new head with release ordering.
++    unsafe {
++        addr_of_mut!(SCANCODE_QUEUE)
++            .cast::<u8>()
++            .add(head)
++            .write(scancode);
++    }
++    SCANCODE_HEAD.store(next, Ordering::Release);
++}
++
++#[unsafe(no_mangle)]
++extern "efiapi" fn sanju_timer_interrupt_dispatch() {
++    TIMER_TICKS.fetch_add(1, Ordering::Relaxed);
++    // SAFETY: IRQ0 is serviced by the master PIC.
++    unsafe {
++        outb(PIC_MASTER_COMMAND, PIC_EOI);
++    }
++}
++
++#[unsafe(no_mangle)]
++extern "efiapi" fn sanju_keyboard_interrupt_dispatch() {
++    let injected = TEST_SCANCODE.swap(0, Ordering::AcqRel);
++    let scancode = if injected == 0 {
++        // SAFETY: IRQ1 indicates the keyboard controller has a data byte.
++        unsafe { inb(KEYBOARD_DATA) }
++    } else {
++        injected
++    };
++
++    enqueue_scancode(scancode);
++    KEYBOARD_IRQS.fetch_add(1, Ordering::Relaxed);
++    // SAFETY: IRQ1 is serviced by the master PIC.
++    unsafe {
++        outb(PIC_MASTER_COMMAND, PIC_EOI);
++    }
++}
++
+ #[allow(clippy::fn_to_numeric_cast)]
+ fn handler_address(handler: unsafe extern "C" fn()) -> u64 {
+     u64::try_from(handler as usize).unwrap_or(u64::MAX)
+@@ -385,13 +654,13 @@ fn debug_byte(byte: u8) {
+     const COM1: u16 = 0x03f8;
+     const LINE_STATUS: u16 = COM1 + 5;
+     for _ in 0..100_000 {
+-        // SAFETY: COM1 is the configured M2 early serial device.
++        // SAFETY: COM1 is the configured early serial device.
+         if unsafe { inb(LINE_STATUS) } & 0x20 != 0 {
+             break;
+         }
+         core::hint::spin_loop();
+     }
+-    // SAFETY: COM1 is the configured M2 early serial device.
++    // SAFETY: COM1 is the configured early serial device.
+     unsafe {
+         outb(COM1, byte);
+     }
+@@ -421,6 +690,13 @@ fn halt() -> ! {
+     }
+ }
+ 
++unsafe fn io_wait() {
++    // SAFETY: Port 0x80 is the conventional POST delay port.
++    unsafe {
++        outb(0x80, 0);
++    }
++}
++
+ unsafe fn outb(port: u16, value: u8) {
+     // SAFETY: The caller owns the specified x86 I/O port.
+     unsafe {
+diff --git a/boot/uefi/src/main.rs b/boot/uefi/src/main.rs
+index bb0bb4a..62d75d0 100644
+--- a/boot/uefi/src/main.rs
++++ b/boot/uefi/src/main.rs
+@@ -9,8 +9,13 @@ use core::ffi::c_void;
+ use core::mem::{MaybeUninit, size_of};
+ use core::panic::PanicInfo;
+ use core::ptr::{addr_of, addr_of_mut};
++use sanju_kernel::fs::RamFs;
++#[cfg(not(feature = "qemu-test"))]
++use sanju_kernel::input::KeyboardDecoder;
+ use sanju_kernel::memory::{BumpAllocator, FrameAllocator};
+-use sanju_kernel::{BootInfo, Console, M2Report, MemoryMapInfo, kernel_main};
++use sanju_kernel::scheduler::{Scheduler, TaskKind};
++use sanju_kernel::shell::{Shell, ShellEnvironment};
++use sanju_kernel::{BootInfo, Console, M4Report, MemoryMapInfo, kernel_main};
+ use serial::SerialConsole;
+ 
+ type EfiHandle = *mut c_void;
+@@ -222,6 +227,12 @@ impl Console for KernelConsole {
+     }
+ }
+ 
++struct NullConsole;
++
++impl Console for NullConsole {
++    fn write_byte(&mut self, _byte: u8) {}
++}
++
+ #[derive(Clone, Copy)]
+ struct MemoryMapSnapshot {
+     info: MemoryMapInfo,
+@@ -260,7 +271,7 @@ extern "efiapi" fn efi_main(
+     };
+ 
+     pre_exit.clear_screen();
+-    pre_exit.write_line("SanjuOS M2 boot transition");
++    pre_exit.write_line("SanjuOS M4 boot transition");
+     pre_exit.write_line("Capturing UEFI memory map...");
+ 
+     let get_memory_map = boot_services.get_memory_map;
+@@ -285,7 +296,7 @@ extern "efiapi" fn efi_main(
+     let boot_info = BootInfo::new(
+         "x86_64",
+         "UEFI",
+-        "Milestone M2: CPU protection and early memory management.",
++        "Milestone M4: interrupt-driven runtime and interactive kernel environment.",
+         snapshot.info,
+     );
+     // SAFETY: Single-core early boot has exclusive ownership of this slot.
+@@ -293,19 +304,20 @@ extern "efiapi" fn efi_main(
+         addr_of_mut!(BOOT_INFO_SLOT)
+             .cast::<BootInfo>()
+             .write(boot_info);
+-        cpu::switch_to_kernel_stack(sanju_m2_kernel_entry);
++        cpu::switch_to_kernel_stack(sanju_m4_kernel_entry);
+     }
+ }
+ 
++#[allow(clippy::too_many_lines)]
+ #[unsafe(no_mangle)]
+-extern "efiapi" fn sanju_m2_kernel_entry() -> ! {
++extern "efiapi" fn sanju_m4_kernel_entry() -> ! {
+     // SAFETY: `efi_main` initializes the slot exactly once before switching to
+-    // this stack and no other execution context can access it during M2 boot.
++    // this stack and no other execution context can access it during the M4 boot path.
+     let boot_info = unsafe { addr_of!(BOOT_INFO_SLOT).cast::<BootInfo>().read() };
+     let mut console = KernelConsole::initialize();
+ 
+     // SAFETY: Firmware has exited, execution is on the dedicated kernel stack,
+-    // and M2 is still a single-core boot with interrupts disabled.
++    // and the bootstrap path is still single-core with interrupts disabled.
+     let cpu_report = unsafe { cpu::initialize() };
+ 
+     // SAFETY: The map is retained in static boot storage for the kernel's life.
+@@ -324,7 +336,7 @@ extern "efiapi" fn sanju_m2_kernel_entry() -> ! {
+         usize::try_from(frame_allocator.total_usable_frames()).unwrap_or(usize::MAX);
+     for _ in 0..3 {
+         if frame_allocator.allocate_frame().is_none() {
+-            console.write_line("FATAL: insufficient conventional memory for M2.");
++            console.write_line("FATAL: insufficient conventional memory for M4 bootstrap.");
+             #[cfg(feature = "qemu-test")]
+             qemu::exit_failure();
+ 
+@@ -366,16 +378,67 @@ extern "efiapi" fn sanju_m2_kernel_entry() -> ! {
+     // SAFETY: The allocator returned an exclusive 64-byte writable block.
+     unsafe { allocation.as_ptr().write_bytes(0xa5, layout.size()) };
+ 
+-    let report = M2Report {
++    // SAFETY: CPU tables are installed, the bootstrap processor owns the PIC
++    // and PIT, and no other driver accesses those ports during this phase.
++    let interrupt_report = unsafe { cpu::initialize_interrupt_runtime() };
++
++    let mut scheduler = Scheduler::new();
++    let scheduler_ready = scheduler.add_task(TaskKind::Idle).is_some()
++        && scheduler.add_task(TaskKind::Shell).is_some()
++        && scheduler.add_task(TaskKind::SystemMonitor).is_some();
++    for offset in 0..12_u64 {
++        let _ = scheduler.dispatch_next(cpu::timer_ticks().saturating_add(offset));
++    }
++    let scheduler_stats = scheduler.stats();
++
++    let mut ramfs = RamFs::with_defaults();
++    let mut shell = Shell::new();
++    let mut null_console = NullConsole;
++    let self_test_environment = ShellEnvironment {
++        timer_ticks: cpu::timer_ticks(),
++        timer_hz: cpu::TIMER_HZ,
++        keyboard_irqs: cpu::keyboard_irqs(),
++        usable_frames,
++        allocated_frames: usize::try_from(frame_allocator.allocated_frames())
++            .unwrap_or(usize::MAX),
++        scheduler_tasks: scheduler_stats.task_count,
++        scheduler_switches: scheduler_stats.context_switches,
++        scheduler_dispatches: scheduler_stats.dispatches,
++    };
++    for byte in b"version\n" {
++        shell.feed_byte(
++            *byte,
++            &mut null_console,
++            &mut ramfs,
++            &self_test_environment,
++        );
++    }
++
++    let report = M4Report {
+         kernel_stack_active: cpu_report.kernel_stack_active,
+         gdt_active: cpu_report.gdt_active,
+         tss_active: cpu_report.tss_active,
+         idt_active: cpu_report.idt_active,
+         breakpoint_self_test_passed: cpu_report.breakpoint_self_test_passed,
++        timer_interrupts_active: interrupt_report.timer_interrupts_active,
++        timer_ticks: interrupt_report.timer_ticks,
++        timer_hz: interrupt_report.timer_hz,
++        keyboard_interrupt_path_active: interrupt_report.keyboard_interrupt_path_active,
++        keyboard_irqs: interrupt_report.keyboard_irqs,
++        keyboard_scancodes_dropped: interrupt_report.dropped_scancodes,
+         usable_frames,
+-        allocated_frames: usize::try_from(frame_allocator.allocated_frames()).unwrap_or(usize::MAX),
++        allocated_frames: usize::try_from(frame_allocator.allocated_frames())
++            .unwrap_or(usize::MAX),
+         heap_allocations: heap.allocations(),
+         heap_remaining_bytes: heap.remaining_bytes(),
++        scheduler_active: scheduler_ready && scheduler_stats.dispatches > 0,
++        scheduler_tasks: scheduler_stats.task_count,
++        scheduler_context_switches: scheduler_stats.context_switches,
++        scheduler_dispatches: scheduler_stats.dispatches,
++        shell_active: true,
++        shell_commands_executed: shell.commands_executed(),
++        ramfs_active: true,
++        ramfs_files: ramfs.file_count(),
+     };
+     kernel_main(&mut console, boot_info, report);
+ 
+@@ -387,11 +450,59 @@ extern "efiapi" fn sanju_m2_kernel_entry() -> ! {
+         halt_forever();
+     }
+ 
++    Shell::start(&mut console);
++
+     #[cfg(feature = "qemu-test")]
+-    qemu::exit_success();
++    {
++        let environment = ShellEnvironment {
++            timer_ticks: cpu::timer_ticks(),
++            timer_hz: cpu::TIMER_HZ,
++            keyboard_irqs: cpu::keyboard_irqs(),
++            usable_frames,
++            allocated_frames: report.allocated_frames,
++            scheduler_tasks: scheduler_stats.task_count,
++            scheduler_switches: scheduler_stats.context_switches,
++            scheduler_dispatches: scheduler_stats.dispatches,
++        };
++        let smoke_commands =
++            b"help\nls\ncat welcome.txt\nwrite boot.log runtime-ok\ncat boot.log\ntasks\nuptime\n";
++        for byte in smoke_commands {
++            shell.feed_byte(*byte, &mut console, &mut ramfs, &environment);
++        }
++        qemu::exit_success();
++    }
+ 
+     #[cfg(not(feature = "qemu-test"))]
+-    halt_forever()
++    {
++        let mut decoder = KeyboardDecoder::new();
++        let mut last_scheduled_tick = cpu::timer_ticks();
++        loop {
++            let current_tick = cpu::timer_ticks();
++            while last_scheduled_tick < current_tick {
++                last_scheduled_tick = last_scheduled_tick.saturating_add(1);
++                let _ = scheduler.dispatch_next(last_scheduled_tick);
++            }
++
++            while let Some(scancode) = cpu::pop_scancode() {
++                if let Some(byte) = decoder.decode(scancode) {
++                    let stats = scheduler.stats();
++                    let environment = ShellEnvironment {
++                        timer_ticks: cpu::timer_ticks(),
++                        timer_hz: cpu::TIMER_HZ,
++                        keyboard_irqs: cpu::keyboard_irqs(),
++                        usable_frames,
++                        allocated_frames: report.allocated_frames,
++                        scheduler_tasks: stats.task_count,
++                        scheduler_switches: stats.context_switches,
++                        scheduler_dispatches: stats.dispatches,
++                    };
++                    shell.feed_byte(byte, &mut console, &mut ramfs, &environment);
++                }
++            }
++
++            cpu::halt_until_interrupt();
++        }
++    }
+ }
+ 
+ trait ClearScreen {
+@@ -493,7 +604,7 @@ fn panic(_info: &PanicInfo<'_>) -> ! {
+ #[allow(dead_code)]
+ fn halt_forever() -> ! {
+     loop {
+-        // SAFETY: Halting is the intended terminal state after M2 completes or
++        // SAFETY: Halting is the intended terminal state after the current milestone or
+         // encounters a non-recoverable condition. Interrupts are disabled to
+         // avoid entering firmware-installed handlers after boot-services exit.
+         unsafe {
+diff --git a/docs/adr/0007-interrupt-runtime-shell-ramfs.md b/docs/adr/0007-interrupt-runtime-shell-ramfs.md
+new file mode 100644
+index 0000000..0362ddd
+--- /dev/null
++++ b/docs/adr/0007-interrupt-runtime-shell-ramfs.md
+@@ -0,0 +1,13 @@
++# ADR 0007: Interrupt Runtime, Kernel Scheduler, Shell, and RAMFS
++
++## Status
++
++Accepted for M4-alpha.
++
++## Decision
++
++Use the legacy 8259 PIC and PIT for the first x86-64 interrupt runtime because they are deterministic in QEMU and require no ACPI/APIC discovery. IRQ0 provides a 100 Hz time base. IRQ1 feeds a bounded single-producer/single-consumer scancode queue. The kernel uses a fixed-capacity round-robin work scheduler, an allocation-free shell, and a fixed-capacity RAM filesystem.
++
++## Boundaries
++
++This is a bootstrap runtime, not the final desktop architecture. Local APIC timers, SMP, register-context switching, production virtual memory, user processes, a VFS, and persistent storage remain later milestones.
+diff --git a/docs/process/BACKLOG.md b/docs/process/BACKLOG.md
+index dd88788..c8c3e4c 100644
+--- a/docs/process/BACKLOG.md
++++ b/docs/process/BACKLOG.md
+@@ -1,45 +1,31 @@
+ # Product Backlog
+ 
+-## M0 — Boot Foundation — accepted
++## Accepted
+ 
+-- Repository, Rust workspace, UEFI adapter, freestanding kernel boundary, CI, and QEMU automation.
++- M0 — repository, UEFI adapter, Rust workspace, CI, QEMU automation.
++- M1 — memory map, `ExitBootServices`, kernel ownership, serial diagnostics.
++- M2 — protected stack, GDT/TSS/IDT, exceptions, frame allocator, bootstrap heap.
+ 
+-## M1 — Firmware Exit and Kernel Ownership — accepted
++## M3/M4 — Interactive Runtime — implementation ready for CI
+ 
+-- UEFI memory-map capture and validation.
+-- Retry-safe `ExitBootServices`.
+-- Owned boot-information ABI.
+-- Firmware-independent serial/debug logging.
+-- Deterministic QEMU smoke exit.
++- PIC remapping and interrupt policy.
++- 100 Hz PIT timer and tick accounting.
++- PS/2 keyboard IRQ and bounded scancode queue.
++- Set-1 keyboard decoder.
++- Fixed-capacity round-robin kernel scheduler.
++- Allocation-free interactive shell.
++- Writable RAM filesystem.
++- QEMU timer, keyboard-vector, scheduler, shell, and filesystem acceptance flow.
+ 
+-## M2 — Protected Core Kernel — implemented; CI acceptance pending
++## M5 — Virtual Memory and User Mode
+ 
+-- M2-001 Dedicated kernel stack and one-way stack transition.
+-- M2-002 Long-mode GDT and TSS.
+-- M2-003 Double-fault IST stack.
+-- M2-004 IDT and breakpoint self-test.
+-- M2-005 General-protection and page-fault diagnostics.
+-- M2-006 Physical frame allocator over conventional memory.
+-- M2-007 Bootstrap bump heap.
+-- M2-008 Host tests and deterministic QEMU assertions.
++- Own the active page tables.
++- Map/unmap APIs, guard pages, NX policy, and address-space layout.
++- Reusable kernel allocator.
++- Ring-3 GDT entries and controlled user transition.
++- Syscall ABI and dispatcher.
++- Process object and first embedded user executable.
+ 
+-## M3 — Interrupts, Scheduling, and Shell
++## Later major epics
+ 
+-- M3-001 Local APIC/PIT timer strategy.
+-- M3-002 Interrupt-controller initialization.
+-- M3-003 PS/2 keyboard input for QEMU.
+-- M3-004 Kernel task model and cooperative scheduler.
+-- M3-005 Interactive command shell.
+-- M3-006 QEMU input and scheduling integration tests.
+-
+-## M4 — Virtual Memory and User Mode
+-
+-- Page-table ownership and address-space manager.
+-- Guard pages and non-executable mappings.
+-- Production kernel heap.
+-- Ring-3 transition and syscall ABI.
+-- Process and capability object model.
+-
+-## Later epics
+-
+-Storage and VFS; PCI and device framework; networking; USB; graphics and compositor; audio; input; power management; user-space runtime; SDK; package/update/recovery; installer; encrypted storage; reference-laptop enablement; sandboxed AI services.
++VFS and persistent storage; PCI and driver model; networking; USB; graphics and compositor; audio; power management; user SDK; packages, signed updates, recovery, installer, encrypted storage, supported-laptop enablement, and sandboxed AI services.
+diff --git a/docs/process/SPRINT_3_4.md b/docs/process/SPRINT_3_4.md
+new file mode 100644
+index 0000000..f3ddefa
+--- /dev/null
++++ b/docs/process/SPRINT_3_4.md
+@@ -0,0 +1,13 @@
++# Combined Sprint 3/4 — Interactive Runtime
++
++## Goal
++
++Move from a protected boot kernel to an interrupt-driven, testable interactive environment in one major delivery.
++
++## Scope
++
++PIC/PIT, timer IRQ, keyboard IRQ and queue, keyboard decoder, scheduler foundation, kernel shell, RAM filesystem, QEMU acceptance script, tests, and documentation.
++
++## Exit gate
++
++Both GitHub Actions jobs pass from a clean checkout and the QEMU log contains `M4 interactive runtime gate: passed` plus successful scripted shell and RAMFS output.
+diff --git a/docs/testing/M4_VALIDATION.md b/docs/testing/M4_VALIDATION.md
+new file mode 100644
+index 0000000..4a45f83
+--- /dev/null
++++ b/docs/testing/M4_VALIDATION.md
+@@ -0,0 +1,14 @@
++# M4 Validation
++
++M4 is accepted only when one clean CI run passes:
++
++- source and ABI checks;
++- `cargo fmt`;
++- host unit tests for decoder, scheduler, shell, RAMFS, memory, and reports;
++- Clippy with warnings denied;
++- x86-64 UEFI release build;
++- QEMU/OVMF boot observing real PIT ticks;
++- keyboard interrupt-vector self-test;
++- scheduler dispatch evidence;
++- scripted shell and RAMFS commands;
++- `M4 interactive runtime gate: passed`.
+diff --git a/kernel/Cargo.toml b/kernel/Cargo.toml
+index 93c1827..58b1817 100644
+--- a/kernel/Cargo.toml
++++ b/kernel/Cargo.toml
+@@ -1,6 +1,6 @@
+ [package]
+ name = "sanju-kernel"
+-version = "0.0.2"
++version = "0.0.4"
+ edition.workspace = true
+ rust-version.workspace = true
+ publish.workspace = true
+diff --git a/kernel/src/fs.rs b/kernel/src/fs.rs
+new file mode 100644
+index 0000000..7251346
+--- /dev/null
++++ b/kernel/src/fs.rs
+@@ -0,0 +1,185 @@
++#![allow(clippy::module_name_repetitions)]
++
++//! Fixed-capacity in-memory filesystem for the first interactive environment.
++
++use core::str;
++
++pub const MAX_FILES: usize = 8;
++const MAX_NAME_LEN: usize = 24;
++const MAX_FILE_BYTES: usize = 512;
++
++/// Filesystem operation failures.
++#[derive(Clone, Copy, Debug, Eq, PartialEq)]
++pub enum FsError {
++    EmptyName,
++    NameTooLong,
++    DataTooLarge,
++    FileTableFull,
++    NotFound,
++}
++
++#[derive(Clone, Copy)]
++struct FileEntry {
++    occupied: bool,
++    name: [u8; MAX_NAME_LEN],
++    name_len: usize,
++    data: [u8; MAX_FILE_BYTES],
++    data_len: usize,
++}
++
++impl FileEntry {
++    const fn empty() -> Self {
++        Self {
++            occupied: false,
++            name: [0; MAX_NAME_LEN],
++            name_len: 0,
++            data: [0; MAX_FILE_BYTES],
++            data_len: 0,
++        }
++    }
++
++    fn name(&self) -> &str {
++        str::from_utf8(&self.name[..self.name_len]).unwrap_or("<invalid>")
++    }
++
++    fn data(&self) -> &[u8] {
++        &self.data[..self.data_len]
++    }
++}
++
++/// Small RAM-backed filesystem with deterministic storage limits.
++pub struct RamFs {
++    files: [FileEntry; MAX_FILES],
++    file_count: usize,
++}
++
++impl RamFs {
++    /// Creates an empty RAM filesystem.
++    #[must_use]
++    pub const fn new() -> Self {
++        Self {
++            files: [FileEntry::empty(); MAX_FILES],
++            file_count: 0,
++        }
++    }
++
++    /// Creates the standard files used by the first shell environment.
++    #[must_use]
++    pub fn with_defaults() -> Self {
++        let mut fs = Self::new();
++        let _ = fs.write(
++            "welcome.txt",
++            concat!(
++                "Welcome to SanjuOS. The kernel shell, scheduler, timer, ",
++                "keyboard pipeline, and RAM filesystem are active.\n"
++            )
++            .as_bytes(),
++        );
++        let _ = fs.write(
++            "system.txt",
++            b"SanjuOS M4: interrupt-driven runtime and interactive kernel environment.\n",
++        );
++        fs
++    }
++
++    /// Creates or overwrites a file.
++    ///
++    /// # Errors
++    ///
++    /// Returns an [`FsError`] when the name or data exceeds the fixed limits,
++    /// the name is empty, or the file table has no free slot.
++    pub fn write(&mut self, name: &str, data: &[u8]) -> Result<(), FsError> {
++        validate(name, data)?;
++
++        let index = if let Some(index) = self.find_index(name) {
++            index
++        } else {
++            let Some(index) = self.files.iter().position(|entry| !entry.occupied) else {
++                return Err(FsError::FileTableFull);
++            };
++            self.file_count += 1;
++            index
++        };
++
++        let entry = &mut self.files[index];
++        entry.occupied = true;
++        entry.name.fill(0);
++        entry.name[..name.len()].copy_from_slice(name.as_bytes());
++        entry.name_len = name.len();
++        entry.data.fill(0);
++        entry.data[..data.len()].copy_from_slice(data);
++        entry.data_len = data.len();
++        Ok(())
++    }
++
++    /// Returns immutable file contents.
++    ///
++    /// # Errors
++    ///
++    /// Returns [`FsError::NotFound`] when no file has the requested name.
++    #[must_use]
++    pub fn read(&self, name: &str) -> Result<&[u8], FsError> {
++        self.find_index(name)
++            .map(|index| self.files[index].data())
++            .ok_or(FsError::NotFound)
++    }
++
++    /// Calls `visitor` for each stored filename.
++    pub fn visit_names(&self, mut visitor: impl FnMut(&str)) {
++        for entry in self.files.iter().filter(|entry| entry.occupied) {
++            visitor(entry.name());
++        }
++    }
++
++    /// Returns the number of active files.
++    #[must_use]
++    pub const fn file_count(&self) -> usize {
++        self.file_count
++    }
++
++    fn find_index(&self, name: &str) -> Option<usize> {
++        self.files
++            .iter()
++            .position(|entry| entry.occupied && entry.name() == name)
++    }
++}
++
++impl Default for RamFs {
++    fn default() -> Self {
++        Self::new()
++    }
++}
++
++fn validate(name: &str, data: &[u8]) -> Result<(), FsError> {
++    if name.is_empty() {
++        return Err(FsError::EmptyName);
++    }
++    if name.len() > MAX_NAME_LEN {
++        return Err(FsError::NameTooLong);
++    }
++    if data.len() > MAX_FILE_BYTES {
++        return Err(FsError::DataTooLarge);
++    }
++    Ok(())
++}
++
++#[cfg(test)]
++mod tests {
++    use super::{FsError, RamFs};
++
++    #[test]
++    fn ramfs_creates_reads_and_overwrites_files() {
++        let mut fs = RamFs::new();
++        fs.write("note.txt", b"one").unwrap();
++        assert_eq!(fs.read("note.txt").unwrap(), b"one");
++        fs.write("note.txt", b"two").unwrap();
++        assert_eq!(fs.read("note.txt").unwrap(), b"two");
++        assert_eq!(fs.file_count(), 1);
++    }
++
++    #[test]
++    fn ramfs_reports_missing_files() {
++        let fs = RamFs::new();
++        assert_eq!(fs.read("missing"), Err(FsError::NotFound));
++    }
++}
+diff --git a/kernel/src/input.rs b/kernel/src/input.rs
+new file mode 100644
+index 0000000..26121f9
+--- /dev/null
++++ b/kernel/src/input.rs
+@@ -0,0 +1,151 @@
++#![allow(clippy::module_name_repetitions)]
++
++//! PS/2 Set-1 keyboard decoding used by the early interactive shell.
++
++/// Stateful decoder for the subset of PS/2 Set-1 needed by the kernel shell.
++#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
++pub struct KeyboardDecoder {
++    left_shift: bool,
++    right_shift: bool,
++    caps_lock: bool,
++}
++
++impl KeyboardDecoder {
++    /// Creates a decoder with no active modifiers.
++    #[must_use]
++    pub const fn new() -> Self {
++        Self {
++            left_shift: false,
++            right_shift: false,
++            caps_lock: false,
++        }
++    }
++
++    /// Consumes one Set-1 scancode and returns an ASCII byte when the key
++    /// represents shell input.
++    #[must_use]
++    #[allow(clippy::too_many_lines)]
++    pub fn decode(&mut self, scancode: u8) -> Option<u8> {
++        let released = scancode & 0x80 != 0;
++        let code = scancode & 0x7f;
++
++        match code {
++            0x2a => {
++                self.left_shift = !released;
++                return None;
++            }
++            0x36 => {
++                self.right_shift = !released;
++                return None;
++            }
++            0x3a if !released => {
++                self.caps_lock = !self.caps_lock;
++                return None;
++            }
++            _ => {}
++        }
++
++        if released {
++            return None;
++        }
++
++        let shifted = self.left_shift || self.right_shift;
++        let byte = match code {
++            0x01 => 0x1b,
++            0x02 => select(shifted, b'1', b'!'),
++            0x03 => select(shifted, b'2', b'@'),
++            0x04 => select(shifted, b'3', b'#'),
++            0x05 => select(shifted, b'4', b'$'),
++            0x06 => select(shifted, b'5', b'%'),
++            0x07 => select(shifted, b'6', b'^'),
++            0x08 => select(shifted, b'7', b'&'),
++            0x09 => select(shifted, b'8', b'*'),
++            0x0a => select(shifted, b'9', b'('),
++            0x0b => select(shifted, b'0', b')'),
++            0x0c => select(shifted, b'-', b'_'),
++            0x0d => select(shifted, b'=', b'+'),
++            0x0e => 0x08,
++            0x0f => b'\t',
++            0x10 => self.letter(b'q', shifted),
++            0x11 => self.letter(b'w', shifted),
++            0x12 => self.letter(b'e', shifted),
++            0x13 => self.letter(b'r', shifted),
++            0x14 => self.letter(b't', shifted),
++            0x15 => self.letter(b'y', shifted),
++            0x16 => self.letter(b'u', shifted),
++            0x17 => self.letter(b'i', shifted),
++            0x18 => self.letter(b'o', shifted),
++            0x19 => self.letter(b'p', shifted),
++            0x1a => select(shifted, b'[', b'{'),
++            0x1b => select(shifted, b']', b'}'),
++            0x1c => b'\n',
++            0x1e => self.letter(b'a', shifted),
++            0x1f => self.letter(b's', shifted),
++            0x20 => self.letter(b'd', shifted),
++            0x21 => self.letter(b'f', shifted),
++            0x22 => self.letter(b'g', shifted),
++            0x23 => self.letter(b'h', shifted),
++            0x24 => self.letter(b'j', shifted),
++            0x25 => self.letter(b'k', shifted),
++            0x26 => self.letter(b'l', shifted),
++            0x27 => select(shifted, b';', b':'),
++            0x28 => select(shifted, b'\'', b'"'),
++            0x29 => select(shifted, b'`', b'~'),
++            0x2b => select(shifted, b'\\', b'|'),
++            0x2c => self.letter(b'z', shifted),
++            0x2d => self.letter(b'x', shifted),
++            0x2e => self.letter(b'c', shifted),
++            0x2f => self.letter(b'v', shifted),
++            0x30 => self.letter(b'b', shifted),
++            0x31 => self.letter(b'n', shifted),
++            0x32 => self.letter(b'm', shifted),
++            0x33 => select(shifted, b',', b'<'),
++            0x34 => select(shifted, b'.', b'>'),
++            0x35 => select(shifted, b'/', b'?'),
++            0x39 => b' ',
++            _ => return None,
++        };
++
++        Some(byte)
++    }
++
++    fn letter(self, lower: u8, shifted: bool) -> u8 {
++        if shifted ^ self.caps_lock {
++            lower.to_ascii_uppercase()
++        } else {
++            lower
++        }
++    }
++}
++
++const fn select(condition: bool, normal: u8, alternate: u8) -> u8 {
++    if condition {
++        alternate
++    } else {
++        normal
++    }
++}
++
++#[cfg(test)]
++mod tests {
++    use super::KeyboardDecoder;
++
++    #[test]
++    fn decoder_handles_letters_modifiers_and_releases() {
++        let mut decoder = KeyboardDecoder::new();
++        assert_eq!(decoder.decode(0x1e), Some(b'a'));
++        assert_eq!(decoder.decode(0x9e), None);
++        assert_eq!(decoder.decode(0x2a), None);
++        assert_eq!(decoder.decode(0x1e), Some(b'A'));
++        assert_eq!(decoder.decode(0xaa), None);
++        assert_eq!(decoder.decode(0x1e), Some(b'a'));
++    }
++
++    #[test]
++    fn decoder_handles_shell_control_keys() {
++        let mut decoder = KeyboardDecoder::new();
++        assert_eq!(decoder.decode(0x1c), Some(b'\n'));
++        assert_eq!(decoder.decode(0x0e), Some(0x08));
++        assert_eq!(decoder.decode(0x39), Some(b' '));
++    }
++}
+diff --git a/kernel/src/lib.rs b/kernel/src/lib.rs
+index c52ad56..2527b26 100644
+--- a/kernel/src/lib.rs
++++ b/kernel/src/lib.rs
+@@ -1,6 +1,10 @@
+ #![cfg_attr(not(test), no_std)]
+ 
++pub mod fs;
++pub mod input;
+ pub mod memory;
++pub mod scheduler;
++pub mod shell;
+ 
+ /// Minimal output boundary used before the full device and logging stacks exist.
+ pub trait Console {
+@@ -21,8 +25,13 @@ pub trait Console {
+         self.write_str("\r\n");
+     }
+ 
+-    /// Writes an unsigned integer without allocation or formatting machinery.
+-    fn write_usize(&mut self, mut value: usize) {
++    /// Writes an unsigned pointer-sized integer without allocation.
++    fn write_usize(&mut self, value: usize) {
++        self.write_u64(u64::try_from(value).unwrap_or(u64::MAX));
++    }
++
++    /// Writes an unsigned 64-bit integer without allocation.
++    fn write_u64(&mut self, mut value: u64) {
+         if value == 0 {
+             self.write_byte(b'0');
+             return;
+@@ -43,10 +52,6 @@ pub trait Console {
+ }
+ 
+ /// Firmware memory map retained after UEFI boot services are terminated.
+-///
+-/// The buffer is owned by the boot image and remains mapped when control moves
+-/// into the kernel. The kernel must interpret entries using `descriptor_size`;
+-/// it must not assume descriptors are tightly packed using a Rust structure.
+ #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+ pub struct MemoryMapInfo {
+     pub buffer_address: usize,
+@@ -95,22 +100,36 @@ impl BootInfo {
+     }
+ }
+ 
+-/// Runtime evidence produced by the M2 protection and memory subsystems.
++/// Runtime evidence produced by the combined M3/M4 kernel batch.
+ #[allow(clippy::struct_excessive_bools)]
+ #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+-pub struct M2Report {
++pub struct M4Report {
+     pub kernel_stack_active: bool,
+     pub gdt_active: bool,
+     pub tss_active: bool,
+     pub idt_active: bool,
+     pub breakpoint_self_test_passed: bool,
++    pub timer_interrupts_active: bool,
++    pub timer_ticks: u64,
++    pub timer_hz: u64,
++    pub keyboard_interrupt_path_active: bool,
++    pub keyboard_irqs: u64,
++    pub keyboard_scancodes_dropped: u64,
+     pub usable_frames: usize,
+     pub allocated_frames: usize,
+     pub heap_allocations: usize,
+     pub heap_remaining_bytes: usize,
++    pub scheduler_active: bool,
++    pub scheduler_tasks: usize,
++    pub scheduler_context_switches: u64,
++    pub scheduler_dispatches: u64,
++    pub shell_active: bool,
++    pub shell_commands_executed: usize,
++    pub ramfs_active: bool,
++    pub ramfs_files: usize,
+ }
+ 
+-impl M2Report {
++impl M4Report {
+     #[must_use]
+     pub const fn gate_passed(self) -> bool {
+         self.kernel_stack_active
+@@ -118,14 +137,28 @@ impl M2Report {
+             && self.tss_active
+             && self.idt_active
+             && self.breakpoint_self_test_passed
++            && self.timer_interrupts_active
++            && self.timer_ticks > 0
++            && self.timer_hz > 0
++            && self.keyboard_interrupt_path_active
++            && self.keyboard_irqs > 0
+             && self.usable_frames > 0
+             && self.allocated_frames > 0
+             && self.heap_allocations > 0
++            && self.scheduler_active
++            && self.scheduler_tasks >= 3
++            && self.scheduler_context_switches > 0
++            && self.scheduler_dispatches > 0
++            && self.shell_active
++            && self.shell_commands_executed > 0
++            && self.ramfs_active
++            && self.ramfs_files >= 2
+     }
+ }
+ 
+-/// Architecture-independent M2 status entry point after firmware exit.
+-pub fn kernel_main(console: &mut dyn Console, boot_info: BootInfo, report: M2Report) {
++/// Architecture-independent M4 status entry point after runtime initialization.
++#[allow(clippy::too_many_lines)]
++pub fn kernel_main(console: &mut dyn Console, boot_info: BootInfo, report: M4Report) {
+     console.write_line("");
+     console.write_line("SanjuOS");
+     console.write_line(boot_info.milestone);
+@@ -134,11 +167,7 @@ pub fn kernel_main(console: &mut dyn Console, boot_info: BootInfo, report: M2Rep
+     console.write_str("Firmware: ");
+     console.write_line(boot_info.firmware);
+     console.write_line("Firmware boot services: exited");
+-    write_state(
+-        console,
+-        "Protected kernel stack",
+-        report.kernel_stack_active,
+-    );
++    write_state(console, "Protected kernel stack", report.kernel_stack_active);
+     write_state(console, "GDT", report.gdt_active);
+     write_state(console, "TSS", report.tss_active);
+     write_state(console, "IDT exception handling", report.idt_active);
+@@ -147,10 +176,30 @@ pub fn kernel_main(console: &mut dyn Console, boot_info: BootInfo, report: M2Rep
+         "Breakpoint exception self-test",
+         report.breakpoint_self_test_passed,
+     );
++    write_state(
++        console,
++        "PIT timer interrupts",
++        report.timer_interrupts_active,
++    );
++    console.write_str("Timer ticks observed: ");
++    console.write_u64(report.timer_ticks);
++    console.write_str(" at ");
++    console.write_u64(report.timer_hz);
++    console.write_line(" Hz");
++    write_state(
++        console,
++        "PS/2 keyboard interrupt path",
++        report.keyboard_interrupt_path_active,
++    );
++    console.write_str("Keyboard IRQs observed: ");
++    console.write_u64(report.keyboard_irqs);
++    console.write_str(", dropped scancodes: ");
++    console.write_u64(report.keyboard_scancodes_dropped);
++    console.write_line("");
+     console.write_str("Usable physical frames: ");
+     console.write_usize(report.usable_frames);
+     console.write_line("");
+-    console.write_str("Allocated test frames: ");
++    console.write_str("Allocated bootstrap frames: ");
+     console.write_usize(report.allocated_frames);
+     console.write_line("");
+     console.write_str("Bootstrap heap allocations: ");
+@@ -159,12 +208,30 @@ pub fn kernel_main(console: &mut dyn Console, boot_info: BootInfo, report: M2Rep
+     console.write_str("Bootstrap heap remaining bytes: ");
+     console.write_usize(report.heap_remaining_bytes);
+     console.write_line("");
++    write_state(console, "Round-robin scheduler", report.scheduler_active);
++    console.write_str("Scheduler tasks: ");
++    console.write_usize(report.scheduler_tasks);
++    console.write_str(", context switches: ");
++    console.write_u64(report.scheduler_context_switches);
++    console.write_str(", dispatches: ");
++    console.write_u64(report.scheduler_dispatches);
++    console.write_line("");
++    write_state(console, "Interactive kernel shell", report.shell_active);
++    console.write_str("Shell commands executed: ");
++    console.write_usize(report.shell_commands_executed);
++    console.write_line("");
++    write_state(console, "RAM filesystem", report.ramfs_active);
++    console.write_str("RAM filesystem files: ");
++    console.write_usize(report.ramfs_files);
++    console.write_line("");
+ 
+     if report.gate_passed() {
+-        console.write_line("M2 core kernel gate: passed");
+-        console.write_line("Next gate: timer interrupts, keyboard, scheduler, and shell");
++        console.write_line("M4 interactive runtime gate: passed");
++        console.write_line(
++            "Next gate: paging ownership, user mode, syscalls, and executable loading",
++        );
+     } else {
+-        console.write_line("M2 core kernel gate: failed");
++        console.write_line("M4 interactive runtime gate: failed");
+     }
+ }
+ 
+@@ -179,7 +246,7 @@ fn write_state(console: &mut dyn Console, label: &str, active: bool) {
+ 
+ #[cfg(test)]
+ mod tests {
+-    use super::{BootInfo, Console, M2Report, MemoryMapInfo, kernel_main};
++    use super::{BootInfo, Console, M4Report, MemoryMapInfo, kernel_main};
+     use std::string::String;
+ 
+     #[derive(Default)]
+@@ -205,53 +272,75 @@ mod tests {
+         }
+     }
+ 
+-    const fn sample_report() -> M2Report {
+-        M2Report {
++    const fn sample_report() -> M4Report {
++        M4Report {
+             kernel_stack_active: true,
+             gdt_active: true,
+             tss_active: true,
+             idt_active: true,
+             breakpoint_self_test_passed: true,
++            timer_interrupts_active: true,
++            timer_ticks: 10,
++            timer_hz: 100,
++            keyboard_interrupt_path_active: true,
++            keyboard_irqs: 1,
++            keyboard_scancodes_dropped: 0,
+             usable_frames: 1_024,
+             allocated_frames: 3,
+             heap_allocations: 2,
+             heap_remaining_bytes: 250_000,
++            scheduler_active: true,
++            scheduler_tasks: 3,
++            scheduler_context_switches: 8,
++            scheduler_dispatches: 8,
++            shell_active: true,
++            shell_commands_executed: 4,
++            ramfs_active: true,
++            ramfs_files: 2,
+         }
+     }
+ 
+     #[test]
+-    fn m2_banner_confirms_protection_and_memory_gates() {
++    fn m4_banner_confirms_interrupt_scheduler_shell_and_fs_gates() {
+         let mut console = RecordingConsole::default();
+         let info = BootInfo::new(
+             "x86_64",
+             "UEFI",
+-            "Milestone M2: CPU protection and early memory management.",
++            "Milestone M4: interrupt-driven runtime and interactive kernel environment.",
+             sample_map(),
+         );
+ 
+         kernel_main(&mut console, info, sample_report());
+ 
+-        assert!(console.output.contains("SanjuOS\r\n"));
++        assert!(console.output.contains("PIT timer interrupts: active\r\n"));
++        assert!(
++            console
++                .output
++                .contains("PS/2 keyboard interrupt path: active\r\n")
++        );
++        assert!(
++            console
++                .output
++                .contains("Round-robin scheduler: active\r\n")
++        );
+         assert!(
+             console
+                 .output
+-                .contains("Protected kernel stack: active\r\n")
++                .contains("Interactive kernel shell: active\r\n")
+         );
+-        assert!(console.output.contains("GDT: active\r\n"));
+-        assert!(console.output.contains("TSS: active\r\n"));
++        assert!(console.output.contains("RAM filesystem: active\r\n"));
+         assert!(
+             console
+                 .output
+-                .contains("Breakpoint exception self-test: active\r\n")
++                .contains("M4 interactive runtime gate: passed\r\n")
+         );
+-        assert!(console.output.contains("M2 core kernel gate: passed\r\n"));
+     }
+ 
+     #[test]
+-    fn m2_gate_rejects_missing_runtime_evidence() {
++    fn m4_gate_rejects_missing_runtime_evidence() {
+         assert!(sample_report().gate_passed());
+         let mut failed = sample_report();
+-        failed.idt_active = false;
++        failed.timer_ticks = 0;
+         assert!(!failed.gate_passed());
+     }
+ 
+@@ -269,13 +358,11 @@ mod tests {
+     }
+ 
+     #[test]
+-    fn write_line_and_integer_output_are_allocation_free_boundaries() {
++    fn console_integer_output_is_allocation_free() {
+         let mut console = RecordingConsole::default();
+-        console.write_line("ready");
+-        console.write_usize(0);
++        console.write_u64(0);
+         console.write_byte(b' ');
+-        console.write_usize(12_345);
+-
+-        assert_eq!(console.output, "ready\r\n0 12345");
++        console.write_u64(12_345_678_901);
++        assert_eq!(console.output, "0 12345678901");
+     }
+ }
+diff --git a/kernel/src/scheduler.rs b/kernel/src/scheduler.rs
+new file mode 100644
+index 0000000..fb0ae28
+--- /dev/null
++++ b/kernel/src/scheduler.rs
+@@ -0,0 +1,183 @@
++#![allow(clippy::module_name_repetitions)]
++
++//! Fixed-capacity cooperative scheduler used before process context switching.
++
++pub const MAX_TASKS: usize = 8;
++
++/// Kernel task roles available during the M3/M4 runtime.
++#[derive(Clone, Copy, Debug, Eq, PartialEq)]
++pub enum TaskKind {
++    Idle,
++    Shell,
++    SystemMonitor,
++}
++
++/// Lifecycle state of one early kernel task.
++#[derive(Clone, Copy, Debug, Eq, PartialEq)]
++pub enum TaskState {
++    Empty,
++    Ready,
++    Running,
++    Blocked,
++}
++
++/// Read-only scheduler statistics exposed to diagnostics and the shell.
++#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
++pub struct SchedulerStats {
++    pub task_count: usize,
++    pub context_switches: u64,
++    pub dispatches: u64,
++    pub current_task_id: usize,
++}
++
++#[derive(Clone, Copy, Debug, Eq, PartialEq)]
++struct TaskSlot {
++    kind: TaskKind,
++    state: TaskState,
++    runs: u64,
++}
++
++impl TaskSlot {
++    const fn empty() -> Self {
++        Self {
++            kind: TaskKind::Idle,
++            state: TaskState::Empty,
++            runs: 0,
++        }
++    }
++}
++
++/// Round-robin scheduler for fixed kernel tasks.
++///
++/// This stage schedules task *work functions*. Register/stack context switching
++/// is intentionally deferred until user-mode process support.
++pub struct Scheduler {
++    tasks: [TaskSlot; MAX_TASKS],
++    task_count: usize,
++    current_index: usize,
++    context_switches: u64,
++    dispatches: u64,
++}
++
++impl Scheduler {
++    /// Creates an empty scheduler.
++    #[must_use]
++    pub const fn new() -> Self {
++        Self {
++            tasks: [TaskSlot::empty(); MAX_TASKS],
++            task_count: 0,
++            current_index: 0,
++            context_switches: 0,
++            dispatches: 0,
++        }
++    }
++
++    /// Registers a ready kernel task and returns its numeric identifier.
++    #[must_use]
++    pub fn add_task(&mut self, kind: TaskKind) -> Option<usize> {
++        if self.task_count == MAX_TASKS {
++            return None;
++        }
++
++        let id = self.task_count;
++        self.tasks[id] = TaskSlot {
++            kind,
++            state: TaskState::Ready,
++            runs: 0,
++        };
++        self.task_count += 1;
++        Some(id)
++    }
++
++    /// Selects the next ready task using round-robin ordering.
++    #[must_use]
++    pub fn dispatch_next(&mut self, _tick: u64) -> Option<TaskKind> {
++        if self.task_count == 0 {
++            return None;
++        }
++
++        if self.tasks[self.current_index].state == TaskState::Running {
++            self.tasks[self.current_index].state = TaskState::Ready;
++        }
++
++        for offset in 1..=self.task_count {
++            let candidate = (self.current_index + offset) % self.task_count;
++            if self.tasks[candidate].state == TaskState::Ready {
++                if candidate != self.current_index || self.dispatches == 0 {
++                    self.context_switches = self.context_switches.saturating_add(1);
++                }
++                self.current_index = candidate;
++                let task = &mut self.tasks[candidate];
++                task.state = TaskState::Running;
++                task.runs = task.runs.saturating_add(1);
++                self.dispatches = self.dispatches.saturating_add(1);
++                return Some(task.kind);
++            }
++        }
++
++        None
++    }
++
++    /// Changes one task's readiness state.
++    #[must_use]
++    pub fn set_blocked(&mut self, task_id: usize, blocked: bool) -> bool {
++        let Some(task) = self.tasks.get_mut(task_id) else {
++            return false;
++        };
++        if task.state == TaskState::Empty {
++            return false;
++        }
++        task.state = if blocked {
++            TaskState::Blocked
++        } else {
++            TaskState::Ready
++        };
++        true
++    }
++
++    /// Returns aggregate scheduler diagnostics.
++    #[must_use]
++    pub const fn stats(&self) -> SchedulerStats {
++        SchedulerStats {
++            task_count: self.task_count,
++            context_switches: self.context_switches,
++            dispatches: self.dispatches,
++            current_task_id: self.current_index,
++        }
++    }
++}
++
++impl Default for Scheduler {
++    fn default() -> Self {
++        Self::new()
++    }
++}
++
++#[cfg(test)]
++mod tests {
++    use super::{Scheduler, TaskKind};
++
++    #[test]
++    fn scheduler_round_robins_ready_tasks() {
++        let mut scheduler = Scheduler::new();
++        scheduler.add_task(TaskKind::Idle).unwrap();
++        scheduler.add_task(TaskKind::Shell).unwrap();
++        scheduler.add_task(TaskKind::SystemMonitor).unwrap();
++
++        assert_eq!(scheduler.dispatch_next(1), Some(TaskKind::Shell));
++        assert_eq!(scheduler.dispatch_next(2), Some(TaskKind::SystemMonitor));
++        assert_eq!(scheduler.dispatch_next(3), Some(TaskKind::Idle));
++        assert_eq!(scheduler.stats().task_count, 3);
++        assert_eq!(scheduler.stats().dispatches, 3);
++        assert!(scheduler.stats().context_switches >= 3);
++    }
++
++    #[test]
++    fn blocked_tasks_are_skipped() {
++        let mut scheduler = Scheduler::new();
++        scheduler.add_task(TaskKind::Idle).unwrap();
++        let shell = scheduler.add_task(TaskKind::Shell).unwrap();
++        assert!(scheduler.set_blocked(shell, true));
++        assert_eq!(scheduler.dispatch_next(1), Some(TaskKind::Idle));
++    }
++}
+diff --git a/kernel/src/shell.rs b/kernel/src/shell.rs
+new file mode 100644
+index 0000000..61ff2a0
+--- /dev/null
++++ b/kernel/src/shell.rs
+@@ -0,0 +1,259 @@
++#![allow(clippy::module_name_repetitions)]
++
++//! Allocation-free command shell for the early kernel runtime.
++
++use core::str;
++
++use crate::Console;
++use crate::fs::{FsError, RamFs};
++
++const COMMAND_BUFFER_BYTES: usize = 128;
++
++/// Snapshot of runtime state displayed by shell commands.
++#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
++pub struct ShellEnvironment {
++    pub timer_ticks: u64,
++    pub timer_hz: u64,
++    pub keyboard_irqs: u64,
++    pub usable_frames: usize,
++    pub allocated_frames: usize,
++    pub scheduler_tasks: usize,
++    pub scheduler_switches: u64,
++    pub scheduler_dispatches: u64,
++}
++
++/// Interactive line editor and command dispatcher.
++pub struct Shell {
++    command: [u8; COMMAND_BUFFER_BYTES],
++    command_len: usize,
++    commands_executed: usize,
++}
++
++impl Shell {
++    /// Creates an empty shell.
++    #[must_use]
++    pub const fn new() -> Self {
++        Self {
++            command: [0; COMMAND_BUFFER_BYTES],
++            command_len: 0,
++            commands_executed: 0,
++        }
++    }
++
++    /// Prints the shell banner and first prompt.
++    pub fn start(console: &mut dyn Console) {
++        console.write_line("");
++        console.write_line("SanjuOS kernel shell ready.");
++        console.write_line("Type 'help' for commands.");
++        write_prompt(console);
++    }
++
++    /// Processes one decoded ASCII byte.
++    pub fn feed_byte(
++        &mut self,
++        byte: u8,
++        console: &mut dyn Console,
++        fs: &mut RamFs,
++        environment: &ShellEnvironment,
++    ) {
++        match byte {
++            b'\r' | b'\n' => {
++                console.write_line("");
++                let command_len = self.command_len;
++                let mut command_copy = [0_u8; COMMAND_BUFFER_BYTES];
++                command_copy[..command_len].copy_from_slice(&self.command[..command_len]);
++                self.command_len = 0;
++
++                if let Ok(line) = str::from_utf8(&command_copy[..command_len]) {
++                    if !line.trim().is_empty() {
++                        execute_line(line.trim(), console, fs, environment);
++                        self.commands_executed = self.commands_executed.saturating_add(1);
++                    }
++                }
++                write_prompt(console);
++            }
++            0x08 | 0x7f => {
++                if self.command_len > 0 {
++                    self.command_len -= 1;
++                    console.write_str("\x08 \x08");
++                }
++            }
++            b'\t' => {
++                self.push_byte(b' ', console);
++                self.push_byte(b' ', console);
++            }
++            0x20..=0x7e => self.push_byte(byte, console),
++            _ => {}
++        }
++    }
++
++    /// Returns the number of non-empty commands executed.
++    #[must_use]
++    pub const fn commands_executed(&self) -> usize {
++        self.commands_executed
++    }
++
++    fn push_byte(&mut self, byte: u8, console: &mut dyn Console) {
++        if self.command_len < self.command.len() - 1 {
++            self.command[self.command_len] = byte;
++            self.command_len += 1;
++            console.write_byte(byte);
++        }
++    }
++}
++
++impl Default for Shell {
++    fn default() -> Self {
++        Self::new()
++    }
++}
++
++#[allow(clippy::too_many_lines)]
++fn execute_line(
++    line: &str,
++    console: &mut dyn Console,
++    fs: &mut RamFs,
++    environment: &ShellEnvironment,
++) {
++    let mut parts = line.split_whitespace();
++    let Some(command) = parts.next() else {
++        return;
++    };
++
++    match command {
++        "help" => {
++            console.write_line(
++                "Commands: help version uptime memory irq tasks ls cat write echo clear",
++            );
++        }
++        "version" => console.write_line("SanjuOS 0.0.4-prealpha (M4)"),
++        "uptime" => {
++            console.write_str("Timer ticks: ");
++            console.write_u64(environment.timer_ticks);
++            console.write_str(" at ");
++            console.write_u64(environment.timer_hz);
++            console.write_line(" Hz");
++        }
++        "memory" => {
++            console.write_str("Usable frames: ");
++            console.write_usize(environment.usable_frames);
++            console.write_str(", allocated bootstrap frames: ");
++            console.write_usize(environment.allocated_frames);
++            console.write_line("");
++        }
++        "irq" => {
++            console.write_str("Keyboard IRQs: ");
++            console.write_u64(environment.keyboard_irqs);
++            console.write_line("");
++        }
++        "tasks" => {
++            console.write_str("Tasks: ");
++            console.write_usize(environment.scheduler_tasks);
++            console.write_str(", switches: ");
++            console.write_u64(environment.scheduler_switches);
++            console.write_str(", dispatches: ");
++            console.write_u64(environment.scheduler_dispatches);
++            console.write_line("");
++        }
++        "ls" => {
++            if fs.file_count() == 0 {
++                console.write_line("<empty>");
++            } else {
++                fs.visit_names(|name| console.write_line(name));
++            }
++        }
++        "cat" => {
++            let Some(name) = parts.next() else {
++                console.write_line("usage: cat <file>");
++                return;
++            };
++            match fs.read(name) {
++                Ok(data) => write_bytes(console, data),
++                Err(FsError::NotFound) => console.write_line("file not found"),
++                Err(_) => console.write_line("filesystem error"),
++            }
++        }
++        "write" => {
++            let mut split = line.splitn(3, ' ');
++            let _ = split.next();
++            let Some(name) = split.next().filter(|name| !name.is_empty()) else {
++                console.write_line("usage: write <file> <text>");
++                return;
++            };
++            let Some(data) = split.next() else {
++                console.write_line("usage: write <file> <text>");
++                return;
++            };
++            match fs.write(name, data.as_bytes()) {
++                Ok(()) => console.write_line("written"),
++                Err(FsError::NameTooLong) => console.write_line("filename too long"),
++                Err(FsError::DataTooLarge) => console.write_line("file data too large"),
++                Err(FsError::FileTableFull) => console.write_line("file table full"),
++                Err(_) => console.write_line("filesystem error"),
++            }
++        }
++        "echo" => {
++            let text = line.strip_prefix("echo").unwrap_or("").trim_start();
++            console.write_line(text);
++        }
++        "clear" => console.write_str("\x1b[2J\x1b[H"),
++        _ => console.write_line("unknown command; type 'help'"),
++    }
++}
++
++fn write_prompt(console: &mut dyn Console) {
++    console.write_str("sanju> ");
++}
++
++fn write_bytes(console: &mut dyn Console, bytes: &[u8]) {
++    for byte in bytes {
++        if *byte == b'\n' {
++            console.write_line("");
++        } else if byte.is_ascii() {
++            console.write_byte(*byte);
++        }
++    }
++    if bytes.last().is_some_and(|byte| *byte != b'\n') {
++        console.write_line("");
++    }
++}
++
++#[cfg(test)]
++mod tests {
++    use super::{Shell, ShellEnvironment};
++    use crate::fs::RamFs;
++    use crate::Console;
++    use std::string::String;
++
++    #[derive(Default)]
++    struct RecordingConsole {
++        output: String,
++    }
++
++    impl Console for RecordingConsole {
++        fn write_byte(&mut self, byte: u8) {
++            self.output.push(char::from(byte));
++        }
++    }
++
++    #[test]
++    fn shell_executes_commands_and_writes_files() {
++        let mut shell = Shell::new();
++        let mut console = RecordingConsole::default();
++        let mut fs = RamFs::with_defaults();
++        Shell::start(&mut console);
++
++        for byte in b"write note.txt hello\ncat note.txt\n" {
++            shell.feed_byte(
++                *byte,
++                &mut console,
++                &mut fs,
++                &ShellEnvironment::default(),
++            );
++        }
++
++        assert!(console.output.contains("written\r\n"));
++        assert!(console.output.contains("hello\r\n"));
++        assert_eq!(shell.commands_executed(), 2);
++    }
++}
+diff --git a/scripts/image.sh b/scripts/image.sh
+index ca2a9b6..f95b31f 100644
+--- a/scripts/image.sh
++++ b/scripts/image.sh
+@@ -12,13 +12,13 @@ for command_name in dd mkfs.vfat mmd mcopy; do
+ done
+ 
+ ./scripts/build.sh
+-rm -f build/sanju-os-m2-alpha.img
++rm -f build/sanju-os-m4-alpha.img
+ 
+-dd if=/dev/zero of=build/sanju-os-m2-alpha.img bs=1M count=64 status=none
+-mkfs.vfat -n SANJUOS build/sanju-os-m2-alpha.img >/dev/null
+-mmd -i build/sanju-os-m2-alpha.img ::/EFI ::/EFI/BOOT
+-mcopy -i build/sanju-os-m2-alpha.img \
++dd if=/dev/zero of=build/sanju-os-m4-alpha.img bs=1M count=64 status=none
++mkfs.vfat -n SANJUOS build/sanju-os-m4-alpha.img >/dev/null
++mmd -i build/sanju-os-m4-alpha.img ::/EFI ::/EFI/BOOT
++mcopy -i build/sanju-os-m4-alpha.img \
+   build/esp/EFI/BOOT/BOOTX64.EFI \
+   ::/EFI/BOOT/BOOTX64.EFI
+ 
+-echo "Created build/sanju-os-m2-alpha.img"
++echo "Created build/sanju-os-m4-alpha.img"
+diff --git a/scripts/smoke-test.sh b/scripts/smoke-test.sh
+index 17627b7..9e09484 100644
+--- a/scripts/smoke-test.sh
++++ b/scripts/smoke-test.sh
+@@ -50,13 +50,18 @@ if [[ "$qemu_status" -ne 33 ]]; then
+   exit 1
+ fi
+ 
+-grep -Fq "Milestone M2: CPU protection and early memory management." build/qemu-debug.log
++grep -Fq "Milestone M4: interrupt-driven runtime and interactive kernel environment." build/qemu-debug.log
+ grep -Fq "Protected kernel stack: active" build/qemu-debug.log
+-grep -Fq "GDT: active" build/qemu-debug.log
+-grep -Fq "TSS: active" build/qemu-debug.log
+ grep -Fq "IDT exception handling: active" build/qemu-debug.log
+-grep -Fq "Breakpoint exception self-test: active" build/qemu-debug.log
+-grep -Fq "M2 core kernel gate: passed" build/qemu-debug.log
++grep -Fq "PIT timer interrupts: active" build/qemu-debug.log
++grep -Fq "PS/2 keyboard interrupt path: active" build/qemu-debug.log
++grep -Fq "Round-robin scheduler: active" build/qemu-debug.log
++grep -Fq "Interactive kernel shell: active" build/qemu-debug.log
++grep -Fq "RAM filesystem: active" build/qemu-debug.log
++grep -Fq "M4 interactive runtime gate: passed" build/qemu-debug.log
++grep -Fq "SanjuOS kernel shell ready." build/qemu-debug.log
++grep -Fq "welcome.txt" build/qemu-debug.log
++grep -Fq "runtime-ok" build/qemu-debug.log
+ 
+ echo "QEMU smoke test passed."
+ cat build/qemu-debug.log
+diff --git a/scripts/source-check.py b/scripts/source-check.py
+index d33cc6e..bcb676b 100644
+--- a/scripts/source-check.py
++++ b/scripts/source-check.py
+@@ -12,6 +12,10 @@ BOOT = ROOT / "boot/uefi/src/main.rs"
+ CPU = ROOT / "boot/uefi/src/cpu.rs"
+ KERNEL = ROOT / "kernel/src/lib.rs"
+ MEMORY = ROOT / "kernel/src/memory.rs"
++INPUT = ROOT / "kernel/src/input.rs"
++SCHEDULER = ROOT / "kernel/src/scheduler.rs"
++SHELL = ROOT / "kernel/src/shell.rs"
++FILESYSTEM = ROOT / "kernel/src/fs.rs"
+ SMOKE = ROOT / "scripts/smoke-test.sh"
+ 
+ 
+@@ -71,6 +75,10 @@ def main() -> int:
+     cpu = CPU.read_text(encoding="utf-8")
+     kernel = KERNEL.read_text(encoding="utf-8")
+     memory = MEMORY.read_text(encoding="utf-8")
++    input_code = INPUT.read_text(encoding="utf-8")
++    scheduler = SCHEDULER.read_text(encoding="utf-8")
++    shell = SHELL.read_text(encoding="utf-8")
++    filesystem = FILESYSTEM.read_text(encoding="utf-8")
+     smoke = SMOKE.read_text(encoding="utf-8")
+ 
+     require(boot, 'extern "efiapi" fn efi_main', BOOT)
+@@ -84,12 +92,24 @@ def main() -> int:
+     require(cpu, '"ltr ax"', CPU)
+     require(cpu, "sanju_double_fault_stub", CPU)
+     require(cpu, "sanju_page_fault_stub", CPU)
++    require(cpu, "sanju_timer_interrupt_stub", CPU)
++    require(cpu, "sanju_keyboard_interrupt_stub", CPU)
++    require(cpu, "remap_and_unmask_pic", CPU)
++    require(cpu, "configure_pit", CPU)
+     require(memory, "pub struct FrameAllocator", MEMORY)
+     require(memory, "EFI_CONVENTIONAL_MEMORY", MEMORY)
+     require(memory, "pub struct BumpAllocator", MEMORY)
+-    require(kernel, "pub struct M2Report", KERNEL)
+-    require(kernel, "M2 core kernel gate: passed", KERNEL)
+-    require(smoke, "Milestone M2: CPU protection and early memory management.", SMOKE)
++    require(input_code, "pub struct KeyboardDecoder", INPUT)
++    require(scheduler, "pub struct Scheduler", SCHEDULER)
++    require(shell, "pub struct Shell", SHELL)
++    require(filesystem, "pub struct RamFs", FILESYSTEM)
++    require(kernel, "pub struct M4Report", KERNEL)
++    require(kernel, "M4 interactive runtime gate: passed", KERNEL)
++    require(
++        smoke,
++        "Milestone M4: interrupt-driven runtime and interactive kernel environment.",
++        SMOKE,
++    )
+ 
+     assert ctypes.sizeof(EfiTableHeader) == 24
+     assert ctypes.sizeof(EfiMemoryDescriptor) == 40
+@@ -103,7 +123,7 @@ def main() -> int:
+     exit_boot_services_offset = 24 + (26 * 8)
+     assert exit_boot_services_offset == 232
+ 
+-    print("SanjuOS M2 source checks passed.")
++    print("SanjuOS M4 source checks passed.")
+     print("UEFI memory descriptor base size: 40 bytes")
+     print("x86-64 TSS size: 104 bytes")
+     print("x86-64 IDT entry size: 16 bytes")
+-- 
+2.47.3
+

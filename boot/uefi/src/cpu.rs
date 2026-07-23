@@ -388,12 +388,7 @@ pub fn pop_scancode() -> Option<u8> {
 
     // SAFETY: `tail` is within the fixed queue and only the kernel consumer
     // reads this slot before publishing the advanced tail.
-    let scancode = unsafe {
-        addr_of!(SCANCODE_QUEUE)
-            .cast::<u8>()
-            .add(tail)
-            .read()
-    };
+    let scancode = unsafe { addr_of!(SCANCODE_QUEUE).cast::<u8>().add(tail).read() };
     SCANCODE_TAIL.store((tail + 1) % SCANCODE_QUEUE_CAPACITY, Ordering::Release);
     Some(scancode)
 }

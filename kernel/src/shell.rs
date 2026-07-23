@@ -64,11 +64,11 @@ impl Shell {
                 command_copy[..command_len].copy_from_slice(&self.command[..command_len]);
                 self.command_len = 0;
 
-                if let Ok(line) = str::from_utf8(&command_copy[..command_len]) {
-                    if !line.trim().is_empty() {
-                        execute_line(line.trim(), console, fs, environment);
-                        self.commands_executed = self.commands_executed.saturating_add(1);
-                    }
+                if let Ok(line) = str::from_utf8(&command_copy[..command_len])
+                    && !line.trim().is_empty()
+                {
+                    execute_line(line.trim(), console, fs, environment);
+                    self.commands_executed = self.commands_executed.saturating_add(1);
                 }
                 write_prompt(console);
             }
@@ -221,8 +221,8 @@ fn write_bytes(console: &mut dyn Console, bytes: &[u8]) {
 #[cfg(test)]
 mod tests {
     use super::{Shell, ShellEnvironment};
-    use crate::fs::RamFs;
     use crate::Console;
+    use crate::fs::RamFs;
     use std::string::String;
 
     #[derive(Default)]
@@ -244,12 +244,7 @@ mod tests {
         Shell::start(&mut console);
 
         for byte in b"write note.txt hello\ncat note.txt\n" {
-            shell.feed_byte(
-                *byte,
-                &mut console,
-                &mut fs,
-                &ShellEnvironment::default(),
-            );
+            shell.feed_byte(*byte, &mut console, &mut fs, &ShellEnvironment::default());
         }
 
         assert!(console.output.contains("written\r\n"));

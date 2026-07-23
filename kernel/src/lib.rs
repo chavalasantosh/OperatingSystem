@@ -167,7 +167,11 @@ pub fn kernel_main(console: &mut dyn Console, boot_info: BootInfo, report: M4Rep
     console.write_str("Firmware: ");
     console.write_line(boot_info.firmware);
     console.write_line("Firmware boot services: exited");
-    write_state(console, "Protected kernel stack", report.kernel_stack_active);
+    write_state(
+        console,
+        "Protected kernel stack",
+        report.kernel_stack_active,
+    );
     write_state(console, "GDT", report.gdt_active);
     write_state(console, "TSS", report.tss_active);
     write_state(console, "IDT exception handling", report.idt_active);
@@ -227,9 +231,8 @@ pub fn kernel_main(console: &mut dyn Console, boot_info: BootInfo, report: M4Rep
 
     if report.gate_passed() {
         console.write_line("M4 interactive runtime gate: passed");
-        console.write_line(
-            "Next gate: paging ownership, user mode, syscalls, and executable loading",
-        );
+        console
+            .write_line("Next gate: paging ownership, user mode, syscalls, and executable loading");
     } else {
         console.write_line("M4 interactive runtime gate: failed");
     }
@@ -318,11 +321,7 @@ mod tests {
                 .output
                 .contains("PS/2 keyboard interrupt path: active\r\n")
         );
-        assert!(
-            console
-                .output
-                .contains("Round-robin scheduler: active\r\n")
-        );
+        assert!(console.output.contains("Round-robin scheduler: active\r\n"));
         assert!(
             console
                 .output

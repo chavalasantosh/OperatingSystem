@@ -117,7 +117,6 @@ impl RamFs {
     /// # Errors
     ///
     /// Returns [`FsError::NotFound`] when no file has the requested name.
-    #[must_use]
     pub fn read(&self, name: &str) -> Result<&[u8], FsError> {
         self.find_index(name)
             .map(|index| self.files[index].data())
