@@ -309,17 +309,15 @@ extern "efiapi" fn sanju_m2_kernel_entry() -> ! {
     let cpu_report = unsafe { cpu::initialize() };
 
     // SAFETY: The map is retained in static boot storage for the kernel's life.
-    let mut frame_allocator = match unsafe { FrameAllocator::from_memory_map(boot_info.memory_map) }
-    {
-        Ok(allocator) => allocator,
-        Err(_) => {
-            console.write_line("FATAL: physical frame allocator initialization failed.");
-            #[cfg(feature = "qemu-test")]
-            qemu::exit_failure();
+    let Ok(mut frame_allocator) =
+        (unsafe { FrameAllocator::from_memory_map(boot_info.memory_map) })
+    else {
+        console.write_line("FATAL: physical frame allocator initialization failed.");
+        #[cfg(feature = "qemu-test")]
+        qemu::exit_failure();
 
-            #[cfg(not(feature = "qemu-test"))]
-            halt_forever();
-        }
+        #[cfg(not(feature = "qemu-test"))]
+        halt_forever();
     };
 
     let usable_frames =
@@ -336,6 +334,7 @@ extern "efiapi" fn sanju_m2_kernel_entry() -> ! {
     }
 
     let mut heap = BumpAllocator::new();
+    // SAFETY: The storage is a static variable exclusively owned by the kernel.
     let heap_start = unsafe { addr_of_mut!(KERNEL_HEAP_STORAGE.0).cast::<u8>().addr() };
     // SAFETY: The static heap range is mapped, writable, and exclusively owned
     // by the bootstrap allocator during this single-core phase.
@@ -348,16 +347,13 @@ extern "efiapi" fn sanju_m2_kernel_entry() -> ! {
         halt_forever();
     }
 
-    let layout = match Layout::from_size_align(64, 16) {
-        Ok(layout) => layout,
-        Err(_) => {
-            console.write_line("FATAL: bootstrap heap layout rejected.");
-            #[cfg(feature = "qemu-test")]
-            qemu::exit_failure();
+    let Ok(layout) = Layout::from_size_align(64, 16) else {
+        console.write_line("FATAL: bootstrap heap layout rejected.");
+        #[cfg(feature = "qemu-test")]
+        qemu::exit_failure();
 
-            #[cfg(not(feature = "qemu-test"))]
-            halt_forever();
-        }
+        #[cfg(not(feature = "qemu-test"))]
+        halt_forever();
     };
     let Some(allocation) = heap.allocate(layout) else {
         console.write_line("FATAL: bootstrap heap allocation failed.");

@@ -325,10 +325,12 @@ fn tss_descriptor(base: u64) -> (u64, u64) {
 }
 
 fn kernel_stack_top() -> usize {
+    // SAFETY: The stack is a static variable owned by the kernel.
     unsafe { addr_of_mut!(KERNEL_STACK.0).cast::<u8>().addr() + KERNEL_STACK_SIZE }
 }
 
 fn double_fault_stack_top() -> usize {
+    // SAFETY: The stack is a static variable owned by the kernel.
     unsafe { addr_of_mut!(DOUBLE_FAULT_STACK.0).cast::<u8>().addr() + DOUBLE_FAULT_STACK_SIZE }
 }
 
