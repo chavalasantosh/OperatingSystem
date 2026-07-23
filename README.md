@@ -1,50 +1,54 @@
 # SanjuOS
 
+![SanjuOS logo](assets/branding/sanjuos-logo.png)
+
 SanjuOS is an independent, Rust-first desktop operating-system project. It is not a Linux distribution. Development proceeds through emulator-verified kernel milestones before any physical-disk work.
 
-## Current checkpoint: M4-alpha — Interactive Runtime
+## Current checkpoint: M5-alpha — Protected Userspace and Startup
 
-M1 and M2 are QEMU-verified. This combined M3/M4 batch adds:
+M1 through M4 are QEMU-verified. The M5 major batch adds:
 
-- remapped 8259 PIC interrupt controllers;
-- a 100 Hz PIT timer and IRQ0 accounting;
-- an IRQ1 PS/2 keyboard path with a lock-free scancode queue;
-- Set-1 keyboard decoding for an interactive command line;
-- a fixed-capacity round-robin kernel-task scheduler;
-- an allocation-free interactive kernel shell;
-- a writable in-memory filesystem with `ls`, `cat`, and `write`;
-- automated timer, keyboard-vector, scheduler, shell, and RAMFS acceptance checks.
+- active x86-64 CR3 capture and four-level paging policy;
+- map/unmap bookkeeping, page flags, W^X checks, and guard-stack descriptors;
+- boot-service memory reclaim accounting;
+- a reusable first-fit kernel heap;
+- Ring 3 GDT selectors and real `IRETQ` user entry;
+- an x86-64 `SYSCALL`/`SYSRET` path;
+- user-pointer validation and syscall ABI models;
+- process control blocks, address-space objects, and quantum scheduling evidence;
+- an allocation-free ELF64 PIE loader;
+- embedded `init`, `hello`, and fault-isolation programs;
+- user page-fault recovery without stopping the kernel;
+- branded startup stages, failure codes, ASCII SanjuOS output, and the approved graphical logo asset;
+- a single QEMU acceptance flow for the complete batch.
 
 Expected smoke output includes:
 
 ```text
-SanjuOS
-Milestone M4: interrupt-driven runtime and interactive kernel environment.
-PIT timer interrupts: active
-PS/2 keyboard interrupt path: active
-Round-robin scheduler: active
-Interactive kernel shell: active
-RAM filesystem: active
-M4 interactive runtime gate: passed
+SanjuOS M5 boot transition
+init: SanjuOS protected userspace online
+hello: running from SanjuOS Ring 3
+SanjuOS: isolated user exception
+Ring 3 execution: active
+System-call interface: active
+ELF64 loader: active
+User fault isolation: passed
+SanjuOS logo print: active
+M5 protected user-space gate: passed
 SanjuOS kernel shell ready.
 ```
 
 ## Shell commands
 
 ```text
-help version uptime memory irq tasks ls cat write echo clear
+help version userspace uptime memory irq tasks ls cat write echo clear
 ```
 
-Run interactively with:
+## Build and verify
 
 ```bash
 make setup
-make run
-```
-
-Run all gates with:
-
-```bash
+make user-programs
 make source-check
 make fmt
 make lint
@@ -55,12 +59,18 @@ make smoke
 ## Repository map
 
 ```text
-boot/uefi/          UEFI entry, CPU tables, PIC/PIT, IRQ handlers, serial adapter
-kernel/             Core models, memory, scheduler, keyboard decoder, shell, RAMFS
+boot/uefi/          UEFI entry, CPU tables, IRQs, Ring 3, syscalls, serial
+kernel/             Core models, paging, heap, processes, ELF, shell, RAMFS
+user/programs/      Position-independent Ring 3 assembly programs
+assets/branding/    Approved SanjuOS graphical logo
 scripts/            Build, image, QEMU, source-check, and test automation
-docs/               Requirements, architecture, ADRs, testing, security, and process
+docs/               Requirements, architecture, ADRs, testing, security, process
 ```
+
+## M5 boundary
+
+M5-alpha proves the first privilege transition, syscall, ELF, and user-fault paths. It does not yet provide a production security boundary: private hardware page-table roots and full register-context preemption remain later hardening work.
 
 ## Safety
 
-M4-alpha remains emulator-only. Do not install it on a physical disk. The next major gate establishes page-table ownership, guarded virtual memory, ring-3 user mode, syscalls, and executable loading.
+M5-alpha remains emulator-only. Do not install it on a physical disk.

@@ -123,10 +123,10 @@ fn execute_line(
     match command {
         "help" => {
             console.write_line(
-                "Commands: help version uptime memory irq tasks ls cat write echo clear",
+                "Commands: help version uptime memory irq tasks ls cat write echo clear userspace",
             );
         }
-        "version" => console.write_line("SanjuOS 0.0.4-prealpha (M4)"),
+        "version" => console.write_line("SanjuOS 0.0.5-prealpha (M5)"),
         "uptime" => {
             console.write_str("Timer ticks: ");
             console.write_u64(environment.timer_ticks);
@@ -196,6 +196,8 @@ fn execute_line(
             let text = line.strip_prefix("echo").unwrap_or("").trim_start();
             console.write_line(text);
         }
+        "userspace" => console
+            .write_line("M5 protected userspace, syscalls, and ELF loader are active."),
         "clear" => console.write_str("\x1b[2J\x1b[H"),
         _ => console.write_line("unknown command; type 'help'"),
     }

@@ -77,7 +77,7 @@ impl RamFs {
         );
         let _ = fs.write(
             "system.txt",
-            b"SanjuOS M4: interrupt-driven runtime and interactive kernel environment.\n",
+            b"SanjuOS M5: protected userspace, syscalls, ELF loading, and branded startup.\n",
         );
         fs
     }

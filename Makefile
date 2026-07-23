@@ -1,12 +1,13 @@
 SHELL := /usr/bin/env bash
 
-.PHONY: help setup source-check fmt lint test build probe verify-probe image run smoke clean
+.PHONY: help setup source-check user-programs fmt lint test build probe verify-probe image run smoke clean
 
 help:
 	@printf '%s\n' \
 	  'SanjuOS developer commands:' \
 	  '  make setup   Install the Rust target used by the UEFI loader' \
 	  '  make source-check  Validate critical source and UEFI ABI invariants' \
+	  '  make user-programs  Rebuild the embedded Ring 3 ELF programs' \
 	  '  make fmt     Check formatting' \
 	  '  make lint    Run Clippy quality gates' \
 	  '  make test    Run host-side kernel tests' \
@@ -23,6 +24,9 @@ setup:
 
 source-check:
 	python3 ./scripts/source-check.py
+
+user-programs:
+	bash ./scripts/build-user-programs.sh
 
 fmt:
 	cargo fmt --all -- --check

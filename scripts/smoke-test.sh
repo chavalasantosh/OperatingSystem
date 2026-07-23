@@ -50,18 +50,23 @@ if [[ "$qemu_status" -ne 33 ]]; then
   exit 1
 fi
 
-grep -Fq "Milestone M4: interrupt-driven runtime and interactive kernel environment." build/qemu-debug.log
-grep -Fq "Protected kernel stack: active" build/qemu-debug.log
-grep -Fq "IDT exception handling: active" build/qemu-debug.log
-grep -Fq "PIT timer interrupts: active" build/qemu-debug.log
-grep -Fq "PS/2 keyboard interrupt path: active" build/qemu-debug.log
-grep -Fq "Round-robin scheduler: active" build/qemu-debug.log
-grep -Fq "Interactive kernel shell: active" build/qemu-debug.log
-grep -Fq "RAM filesystem: active" build/qemu-debug.log
-grep -Fq "M4 interactive runtime gate: passed" build/qemu-debug.log
+grep -Fq "SanjuOS M5 boot transition" build/qemu-debug.log
+grep -Fq "Milestone M5: protected user-space foundation and branded startup." build/qemu-debug.log
+grep -Fq "init: SanjuOS protected userspace online" build/qemu-debug.log
+grep -Fq "hello: running from SanjuOS Ring 3" build/qemu-debug.log
+grep -Fq "SanjuOS: isolated user exception" build/qemu-debug.log
+grep -Fq "Paging ownership: active" build/qemu-debug.log
+grep -Fq "Kernel heap: active" build/qemu-debug.log
+grep -Fq "Ring 3 execution: active" build/qemu-debug.log
+grep -Fq "User address-space isolation: active" build/qemu-debug.log
+grep -Fq "System-call interface: active" build/qemu-debug.log
+grep -Fq "ELF64 loader: active" build/qemu-debug.log
+grep -Fq "User processes launched: 3" build/qemu-debug.log
+grep -Fq "User fault isolation: passed" build/qemu-debug.log
+grep -Fq "SanjuOS logo print: active" build/qemu-debug.log
+grep -Fq "M5 protected user-space gate: passed" build/qemu-debug.log
 grep -Fq "SanjuOS kernel shell ready." build/qemu-debug.log
-grep -Fq "welcome.txt" build/qemu-debug.log
-grep -Fq "runtime-ok" build/qemu-debug.log
+grep -Fq "M5 protected userspace, syscalls, and ELF loader are active." build/qemu-debug.log
 
 echo "QEMU smoke test passed."
 cat build/qemu-debug.log

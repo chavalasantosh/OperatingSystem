@@ -6,8 +6,8 @@
 - Architecture: x86-64
 - Firmware: UEFI 2.x
 - Primary language: Rust 2024
-- Current checkpoint: 0.0.4-prealpha / M4-alpha
-- Accepted releases: M1 and M2
+- Current checkpoint: 0.0.5-prealpha / M5-alpha
+- Accepted releases: M1, M2, M3, and M4
 - Deployment policy: QEMU only until physical-install safety gates pass
 
 ## Mission
@@ -20,8 +20,8 @@ Development is grouped into major milestone batches. Small formatting or CI corr
 
 ## Current objective
 
-Pass the combined M3/M4 quality and QEMU gates for timer and keyboard interrupts, scheduler foundations, interactive shell, and RAM filesystem.
+Pass the single M5 quality and QEMU gate for paging policy, reusable allocation, Ring 3 execution, syscalls, ELF loading, process/fault handling, and branded startup.
 
 ## Next major objective
 
-M5 will take ownership of page tables, add guarded virtual address spaces and a reusable kernel allocator, enter ring 3, define the syscall ABI, and load the first user executable.
+After M5 acceptance, build hardware-owned process page tables and context switching, then move into PCI/storage discovery, a VFS, persistent filesystem, framebuffer graphics, and the first compositor.

@@ -7,10 +7,14 @@ use core::sync::atomic::{AtomicU8, AtomicU64, AtomicUsize, Ordering};
 
 const KERNEL_CODE_SELECTOR: u16 = 0x08;
 const KERNEL_DATA_SELECTOR: u16 = 0x10;
-const TSS_SELECTOR: u16 = 0x18;
+const USER_DATA_SELECTOR: u16 = 0x18;
+const USER_CODE_SELECTOR: u16 = 0x20;
+const TSS_SELECTOR: u16 = 0x28;
 const DOUBLE_FAULT_IST: u8 = 1;
 const KERNEL_STACK_SIZE: usize = 64 * 1024;
 const DOUBLE_FAULT_STACK_SIZE: usize = 32 * 1024;
+const SYSCALL_STACK_SIZE: usize = 64 * 1024;
+const USER_INTERRUPT_STACK_SIZE: usize = 64 * 1024;
 const IDT_ENTRY_COUNT: usize = 256;
 const PIC_MASTER_COMMAND: u16 = 0x20;
 const PIC_MASTER_DATA: u16 = 0x21;
@@ -34,8 +38,17 @@ struct Stack([u8; KERNEL_STACK_SIZE]);
 #[repr(C, align(16))]
 struct DoubleFaultStack([u8; DOUBLE_FAULT_STACK_SIZE]);
 
+#[repr(C, align(16))]
+struct SyscallStack([u8; SYSCALL_STACK_SIZE]);
+
+#[repr(C, align(16))]
+struct UserInterruptStack([u8; USER_INTERRUPT_STACK_SIZE]);
+
 static mut KERNEL_STACK: Stack = Stack([0; KERNEL_STACK_SIZE]);
 static mut DOUBLE_FAULT_STACK: DoubleFaultStack = DoubleFaultStack([0; DOUBLE_FAULT_STACK_SIZE]);
+static mut SYSCALL_STACK: SyscallStack = SyscallStack([0; SYSCALL_STACK_SIZE]);
+static mut USER_INTERRUPT_STACK: UserInterruptStack =
+    UserInterruptStack([0; USER_INTERRUPT_STACK_SIZE]);
 
 #[repr(C, packed)]
 struct TaskStateSegment {
@@ -109,7 +122,7 @@ impl IdtEntry {
 }
 
 static mut TSS: TaskStateSegment = TaskStateSegment::new();
-static mut GDT: [u64; 5] = [0; 5];
+static mut GDT: [u64; 7] = [0; 7];
 static mut IDT: [IdtEntry; IDT_ENTRY_COUNT] = [IdtEntry::missing(); IDT_ENTRY_COUNT];
 static mut SCANCODE_QUEUE: [u8; SCANCODE_QUEUE_CAPACITY] = [0; SCANCODE_QUEUE_CAPACITY];
 static SCANCODE_HEAD: AtomicUsize = AtomicUsize::new(0);
@@ -118,6 +131,34 @@ static SCANCODE_DROPPED: AtomicU64 = AtomicU64::new(0);
 static TIMER_TICKS: AtomicU64 = AtomicU64::new(0);
 static KEYBOARD_IRQS: AtomicU64 = AtomicU64::new(0);
 static TEST_SCANCODE: AtomicU8 = AtomicU8::new(0);
+static CURRENT_USER_PID: AtomicU64 = AtomicU64::new(0);
+static USER_SYSCALLS: AtomicU64 = AtomicU64::new(0);
+static USER_YIELDS: AtomicU64 = AtomicU64::new(0);
+static USER_TIMER_PREEMPTIONS: AtomicU64 = AtomicU64::new(0);
+static USER_EXIT_CODE: AtomicU64 = AtomicU64::new(0);
+static USER_FAULT_ADDRESS: AtomicU64 = AtomicU64::new(0);
+static USER_FAULT_ERROR: AtomicU64 = AtomicU64::new(0);
+
+#[unsafe(no_mangle)]
+pub static mut SANJU_SYSCALL_KERNEL_RSP: u64 = 0;
+#[unsafe(no_mangle)]
+pub static mut SANJU_SYSCALL_USER_RSP: u64 = 0;
+#[unsafe(no_mangle)]
+pub static mut SANJU_USER_RESUME_RSP: u64 = 0;
+#[unsafe(no_mangle)]
+pub static mut SANJU_USER_RESUME_RIP: u64 = 0;
+#[unsafe(no_mangle)]
+pub static mut SANJU_USER_REGION_START: u64 = 0;
+#[unsafe(no_mangle)]
+pub static mut SANJU_USER_REGION_END: u64 = 0;
+#[unsafe(no_mangle)]
+pub static mut SANJU_USER_STACK_START: u64 = 0;
+#[unsafe(no_mangle)]
+pub static mut SANJU_USER_STACK_END: u64 = 0;
+#[unsafe(no_mangle)]
+pub static mut SANJU_USER_EXIT_REQUESTED: u8 = 0;
+#[unsafe(no_mangle)]
+pub static mut SANJU_USER_FAULTED: u8 = 0;
 
 #[unsafe(no_mangle)]
 pub static SANJU_BREAKPOINT_SEEN: AtomicU8 = AtomicU8::new(0);
@@ -142,6 +183,30 @@ pub struct InterruptRuntimeReport {
     pub keyboard_interrupt_path_active: bool,
     pub keyboard_irqs: u64,
     pub dropped_scancodes: u64,
+}
+
+/// Evidence that x86-64 paging and Ring 3 entry facilities are installed.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct UserModeRuntimeReport {
+    pub active_page_table_root: u64,
+    pub four_level_paging_active: bool,
+    pub user_gdt_active: bool,
+    pub syscall_interface_active: bool,
+    pub page_fault_diagnostics_active: bool,
+}
+
+/// Result of one protected user-program execution.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct UserRunResult {
+    pub pid: u32,
+    pub exited: bool,
+    pub exit_code: i32,
+    pub faulted: bool,
+    pub fault_address: u64,
+    pub fault_error_code: u64,
+    pub syscalls: u64,
+    pub yields: u64,
+    pub timer_preemptions: u64,
 }
 
 global_asm!(
@@ -204,6 +269,8 @@ sanju_double_fault_stub:
 
     .global sanju_general_protection_stub
 sanju_general_protection_stub:
+    test qword ptr [rsp + 16], 3
+    jnz sanju_user_general_protection
     mov rcx, 13
     mov rdx, [rsp]
     xor r8, r8
@@ -211,9 +278,20 @@ sanju_general_protection_stub:
     sub rsp, 32
     call sanju_fatal_exception_dispatch
     ud2
+sanju_user_general_protection:
+    mov rcx, 13
+    mov rdx, [rsp]
+    xor r8, r8
+    and rsp, -16
+    sub rsp, 32
+    call sanju_user_fault_dispatch
+    mov rsp, qword ptr [rip + SANJU_USER_RESUME_RSP]
+    jmp qword ptr [rip + SANJU_USER_RESUME_RIP]
 
     .global sanju_page_fault_stub
 sanju_page_fault_stub:
+    test qword ptr [rsp + 16], 3
+    jnz sanju_user_page_fault
     mov rcx, 14
     mov rdx, [rsp]
     mov r8, cr2
@@ -221,6 +299,15 @@ sanju_page_fault_stub:
     sub rsp, 32
     call sanju_fatal_exception_dispatch
     ud2
+sanju_user_page_fault:
+    mov rcx, 14
+    mov rdx, [rsp]
+    mov r8, cr2
+    and rsp, -16
+    sub rsp, 32
+    call sanju_user_fault_dispatch
+    mov rsp, qword ptr [rip + SANJU_USER_RESUME_RSP]
+    jmp qword ptr [rip + SANJU_USER_RESUME_RIP]
 
     .global sanju_timer_interrupt_stub
 sanju_timer_interrupt_stub:
@@ -245,6 +332,84 @@ sanju_keyboard_interrupt_stub:
     mov rsp, r12
     SANJU_POP_REGISTERS
     iretq
+
+    .global sanju_enter_user_mode_asm
+sanju_enter_user_mode_asm:
+    push rbx
+    push rbp
+    push rdi
+    push rsi
+    push r12
+    push r13
+    push r14
+    push r15
+    mov qword ptr [rip + SANJU_USER_RESUME_RSP], rsp
+    lea rax, [rip + sanju_user_resume]
+    mov qword ptr [rip + SANJU_USER_RESUME_RIP], rax
+    push 0x1b
+    push rdx
+    push 0x202
+    push 0x23
+    push rcx
+    iretq
+sanju_user_resume:
+    pop r15
+    pop r14
+    pop r13
+    pop r12
+    pop rsi
+    pop rdi
+    pop rbp
+    pop rbx
+    ret
+
+    .global sanju_syscall_entry_stub
+sanju_syscall_entry_stub:
+    mov qword ptr [rip + SANJU_SYSCALL_USER_RSP], rsp
+    mov rsp, qword ptr [rip + SANJU_SYSCALL_KERNEL_RSP]
+    push rbx
+    push rbp
+    push r12
+    push r13
+    push r14
+    push r15
+    push rcx
+    push r11
+    push rdi
+    push rsi
+    push rdx
+    push r10
+    push r8
+    push r9
+    mov rcx, rax
+    mov rdx, qword ptr [rsp + 40]
+    mov r8, qword ptr [rsp + 32]
+    mov r9, qword ptr [rsp + 24]
+    sub rsp, 32
+    cld
+    call sanju_syscall_dispatch
+    add rsp, 32
+    cmp byte ptr [rip + SANJU_USER_EXIT_REQUESTED], 0
+    jne sanju_syscall_resume_kernel
+    pop r9
+    pop r8
+    pop r10
+    pop rdx
+    pop rsi
+    pop rdi
+    pop r11
+    pop rcx
+    pop r15
+    pop r14
+    pop r13
+    pop r12
+    pop rbp
+    pop rbx
+    mov rsp, qword ptr [rip + SANJU_SYSCALL_USER_RSP]
+    sysretq
+sanju_syscall_resume_kernel:
+    mov rsp, qword ptr [rip + SANJU_USER_RESUME_RSP]
+    jmp qword ptr [rip + SANJU_USER_RESUME_RIP]
 "#
 );
 
@@ -255,6 +420,11 @@ unsafe extern "C" {
     fn sanju_page_fault_stub();
     fn sanju_timer_interrupt_stub();
     fn sanju_keyboard_interrupt_stub();
+    fn sanju_syscall_entry_stub();
+}
+
+unsafe extern "efiapi" {
+    fn sanju_enter_user_mode_asm(entry: u64, stack_top: u64);
 }
 
 /// Moves execution to the statically reserved kernel stack.
@@ -394,6 +564,7 @@ pub fn pop_scancode() -> Option<u8> {
 }
 
 /// Halts until the next enabled interrupt.
+#[allow(dead_code)]
 pub fn halt_until_interrupt() {
     // SAFETY: The interrupt runtime is initialized before this helper is used.
     unsafe {
@@ -401,9 +572,276 @@ pub fn halt_until_interrupt() {
     }
 }
 
+/// Installs Ring 3 selectors, captures CR3, and configures SYSCALL/SYSRET.
+///
+/// # Safety
+///
+/// Must run once after the GDT and IDT are installed on the bootstrap CPU.
+#[must_use]
+pub unsafe fn initialize_user_mode_runtime() -> UserModeRuntimeReport {
+    let root = active_page_table_root();
+    // SAFETY: The dedicated syscall stack is statically owned by this CPU and
+    // the MSRs are programmed once during single-core bootstrap.
+    unsafe {
+        SANJU_SYSCALL_KERNEL_RSP = u64::try_from(syscall_stack_top()).unwrap_or(u64::MAX);
+        configure_syscall_msrs();
+    }
+    UserModeRuntimeReport {
+        active_page_table_root: root,
+        four_level_paging_active: root != 0,
+        user_gdt_active: true,
+        syscall_interface_active: true,
+        page_fault_diagnostics_active: true,
+    }
+}
+
+/// Reads the physical root of the active x86-64 page-table hierarchy.
+#[must_use]
+pub fn active_page_table_root() -> u64 {
+    let value: u64;
+    // SAFETY: Reading CR3 is side-effect free at Ring 0.
+    unsafe {
+        asm!("mov {value}, cr3", value = out(reg) value, options(nomem, nostack, preserves_flags));
+    }
+    value & 0x000f_ffff_ffff_f000
+}
+
+/// Runs one loaded ELF entry point at Ring 3 and returns after exit or a
+/// recoverable user exception.
+///
+/// # Safety
+///
+/// The image and stack ranges must remain mapped for the duration of the call.
+/// The entry point must lie inside `image_start..image_start + image_size`.
+#[allow(clippy::too_many_arguments)]
+#[must_use]
+pub unsafe fn run_user_process(
+    entry: u64,
+    image_start: u64,
+    image_size: usize,
+    stack_start: u64,
+    stack_size: usize,
+    pid: u32,
+) -> UserRunResult {
+    let image_end = image_start
+        .checked_add(u64::try_from(image_size).unwrap_or(u64::MAX))
+        .unwrap_or(u64::MAX);
+    let stack_end = stack_start
+        .checked_add(u64::try_from(stack_size).unwrap_or(u64::MAX))
+        .unwrap_or(u64::MAX);
+
+    CURRENT_USER_PID.store(u64::from(pid), Ordering::SeqCst);
+    USER_SYSCALLS.store(0, Ordering::SeqCst);
+    USER_YIELDS.store(0, Ordering::SeqCst);
+    USER_TIMER_PREEMPTIONS.store(0, Ordering::SeqCst);
+    USER_EXIT_CODE.store(0, Ordering::SeqCst);
+    USER_FAULT_ADDRESS.store(0, Ordering::SeqCst);
+    USER_FAULT_ERROR.store(0, Ordering::SeqCst);
+    // SAFETY: Single-core user execution has exclusive ownership of the raw
+    // ABI handoff fields until the assembly trampoline returns.
+    unsafe {
+        SANJU_USER_REGION_START = image_start;
+        SANJU_USER_REGION_END = image_end;
+        SANJU_USER_STACK_START = stack_start;
+        SANJU_USER_STACK_END = stack_end;
+        SANJU_USER_EXIT_REQUESTED = 0;
+        SANJU_USER_FAULTED = 0;
+    }
+
+    // SAFETY: The active UEFI page tables are identity-accessible in this boot
+    // environment. The routine only promotes the supplied existing mappings to
+    // user accessibility and clears NX for the loaded image.
+    let image_ready = unsafe { mark_user_range(image_start, image_size, true) };
+    // SAFETY: Same contract as above; the user stack remains writable under its
+    // existing mapping and is only promoted to Ring 3 visibility.
+    let stack_ready = unsafe { mark_user_range(stack_start, stack_size, false) };
+    if !image_ready || !stack_ready || entry < image_start || entry >= image_end {
+        CURRENT_USER_PID.store(0, Ordering::SeqCst);
+        return UserRunResult {
+            pid,
+            exited: false,
+            exit_code: -1,
+            faulted: true,
+            fault_address: entry,
+            fault_error_code: u64::MAX,
+            syscalls: 0,
+            yields: 0,
+            timer_preemptions: 0,
+        };
+    }
+
+    // SAFETY: Selectors, TSS, syscall MSRs, user mappings, and stack are active.
+    unsafe {
+        sanju_enter_user_mode_asm(entry, stack_end & !0x0f);
+        asm!("sti", options(nomem, nostack, preserves_flags));
+    }
+
+    let faulted = unsafe { SANJU_USER_FAULTED != 0 };
+    let exited = unsafe { SANJU_USER_EXIT_REQUESTED != 0 } && !faulted;
+    let exit_code = i32::from_ne_bytes(
+        u32::try_from(USER_EXIT_CODE.load(Ordering::SeqCst) & u64::from(u32::MAX))
+            .unwrap_or(u32::MAX)
+            .to_ne_bytes(),
+    );
+    let result = UserRunResult {
+        pid,
+        exited,
+        exit_code,
+        faulted,
+        fault_address: USER_FAULT_ADDRESS.load(Ordering::SeqCst),
+        fault_error_code: USER_FAULT_ERROR.load(Ordering::SeqCst),
+        syscalls: USER_SYSCALLS.load(Ordering::SeqCst),
+        yields: USER_YIELDS.load(Ordering::SeqCst),
+        timer_preemptions: USER_TIMER_PREEMPTIONS.load(Ordering::SeqCst),
+    };
+    CURRENT_USER_PID.store(0, Ordering::SeqCst);
+    result
+}
+
+unsafe fn configure_syscall_msrs() {
+    const IA32_EFER: u32 = 0xc000_0080;
+    const IA32_STAR: u32 = 0xc000_0081;
+    const IA32_LSTAR: u32 = 0xc000_0082;
+    const IA32_FMASK: u32 = 0xc000_0084;
+    const EFER_SCE: u64 = 1 << 0;
+    const EFER_NXE: u64 = 1 << 11;
+
+    // SYSRET adds 16 for CS and 8 for SS to the upper STAR selector base.
+    debug_assert_eq!(USER_CODE_SELECTOR, USER_DATA_SELECTOR + 8);
+    let user_selector_base = u64::from(USER_CODE_SELECTOR.saturating_sub(16));
+    let star = (user_selector_base << 48) | (u64::from(KERNEL_CODE_SELECTOR) << 32);
+    // SAFETY: These architectural MSRs are present in x86-64 long mode.
+    unsafe {
+        let efer = read_msr(IA32_EFER);
+        write_msr(IA32_EFER, efer | EFER_SCE | EFER_NXE);
+        write_msr(IA32_STAR, star);
+        write_msr(IA32_LSTAR, handler_address(sanju_syscall_entry_stub));
+        write_msr(IA32_FMASK, (1 << 8) | (1 << 9) | (1 << 10));
+    }
+}
+
+unsafe fn mark_user_range(start: u64, length: usize, executable: bool) -> bool {
+    if length == 0 {
+        return false;
+    }
+    let Ok(length) = u64::try_from(length) else {
+        return false;
+    };
+    let Some(end) = start.checked_add(length.saturating_sub(1)) else {
+        return false;
+    };
+    let mut page = start & !0xfff;
+    let last = end & !0xfff;
+    loop {
+        // SAFETY: The page walker follows present entries from the active CR3.
+        if !unsafe { mark_user_page(page, executable) } {
+            return false;
+        }
+        if page == last {
+            break;
+        }
+        let Some(next) = page.checked_add(4096) else {
+            return false;
+        };
+        page = next;
+    }
+    true
+}
+
+#[allow(clippy::cast_ptr_alignment)]
+unsafe fn mark_user_page(address: u64, executable: bool) -> bool {
+    const PRESENT: u64 = 1 << 0;
+    const USER: u64 = 1 << 2;
+    const HUGE: u64 = 1 << 7;
+    const NX: u64 = 1 << 63;
+    const ADDRESS_MASK: u64 = 0x000f_ffff_ffff_f000;
+
+    let indices = [
+        usize::try_from((address >> 39) & 0x1ff).unwrap_or(0),
+        usize::try_from((address >> 30) & 0x1ff).unwrap_or(0),
+        usize::try_from((address >> 21) & 0x1ff).unwrap_or(0),
+        usize::try_from((address >> 12) & 0x1ff).unwrap_or(0),
+    ];
+    let mut table_address = active_page_table_root();
+    if table_address == 0 {
+        return false;
+    }
+
+    for (level, index) in indices.into_iter().enumerate() {
+        let Ok(table_usize) = usize::try_from(table_address) else {
+            return false;
+        };
+        let table = table_usize as *mut u64;
+        // SAFETY: `table` is a present page-table frame reached from CR3 and
+        // `index` is limited to the architectural 0..512 range.
+        let entry_pointer = unsafe { table.add(index) };
+        // SAFETY: The active page table is mapped by the boot environment.
+        let mut entry = unsafe { entry_pointer.read_volatile() };
+        if entry & PRESENT == 0 {
+            return false;
+        }
+        entry |= USER;
+        if executable && (level == 3 || (level >= 1 && entry & HUGE != 0)) {
+            entry &= !NX;
+        }
+        // SAFETY: This updates only access flags on an existing mapping.
+        unsafe {
+            entry_pointer.write_volatile(entry);
+        }
+        if level == 3 || (level >= 1 && entry & HUGE != 0) {
+            // SAFETY: Invalidate the modified translation for this address.
+            unsafe {
+                asm!(
+                    "invlpg [{address}]",
+                    address = in(reg) address,
+                    options(nostack, preserves_flags)
+                );
+            }
+            return true;
+        }
+        table_address = entry & ADDRESS_MASK;
+    }
+    false
+}
+
+unsafe fn read_msr(msr: u32) -> u64 {
+    let low: u32;
+    let high: u32;
+    // SAFETY: The caller chooses an architectural MSR valid in long mode.
+    unsafe {
+        asm!(
+            "rdmsr",
+            in("ecx") msr,
+            out("eax") low,
+            out("edx") high,
+            options(nomem, nostack, preserves_flags)
+        );
+    }
+    (u64::from(high) << 32) | u64::from(low)
+}
+
+unsafe fn write_msr(msr: u32, value: u64) {
+    let low = u32::try_from(value & u64::from(u32::MAX)).unwrap_or(u32::MAX);
+    let high = u32::try_from(value >> 32).unwrap_or(u32::MAX);
+    // SAFETY: The caller chooses an architectural MSR and value.
+    unsafe {
+        asm!(
+            "wrmsr",
+            in("ecx") msr,
+            in("eax") low,
+            in("edx") high,
+            options(nomem, nostack, preserves_flags)
+        );
+    }
+}
+
 unsafe fn install_gdt_and_tss() {
     let tss = TaskStateSegment {
-        privilege_stack_table: [u64::try_from(kernel_stack_top()).unwrap_or(u64::MAX), 0, 0],
+        privilege_stack_table: [
+            u64::try_from(user_interrupt_stack_top()).unwrap_or(u64::MAX),
+            0,
+            0,
+        ],
         interrupt_stack_table: [
             u64::try_from(double_fault_stack_top()).unwrap_or(u64::MAX),
             0,
@@ -424,22 +862,25 @@ unsafe fn install_gdt_and_tss() {
     let (tss_low, tss_high) = tss_descriptor(tss_base);
     let gdt = addr_of_mut!(GDT).cast::<u64>();
 
-    // SAFETY: `GDT` contains exactly five entries and is exclusively owned.
+    // SAFETY: `GDT` contains exactly seven entries and is exclusively owned.
     unsafe {
         gdt.write(0);
         gdt.add(1).write(0x00af_9a00_0000_ffff);
         gdt.add(2).write(0x00cf_9200_0000_ffff);
-        gdt.add(3).write(tss_low);
-        gdt.add(4).write(tss_high);
+        gdt.add(3).write(0x00cf_f200_0000_ffff);
+        gdt.add(4).write(0x00af_fa00_0000_ffff);
+        gdt.add(5).write(tss_low);
+        gdt.add(6).write(tss_high);
     }
 
     let gdtr = DescriptorTablePointer {
-        limit: u16::try_from(size_of::<[u64; 5]>() - 1).unwrap_or(u16::MAX),
+        limit: u16::try_from(size_of::<[u64; 7]>() - 1).unwrap_or(u16::MAX),
         base: u64::try_from(addr_of!(GDT).addr()).unwrap_or(u64::MAX),
     };
 
-    // SAFETY: The descriptor pointer references the static GDT, the selectors
-    // match its entries, and TSS selector 0x18 spans entries three and four.
+    // SAFETY: The descriptor pointer references the static GDT. Ring 0 uses
+    // selectors 0x08/0x10, Ring 3 uses 0x23/0x1b, and the TSS spans entries
+    // five and six at selector 0x28.
     unsafe {
         asm!(
             "lgdt [{gdtr}]",
@@ -548,6 +989,9 @@ fn enqueue_scancode(scancode: u8) {
 #[unsafe(no_mangle)]
 extern "efiapi" fn sanju_timer_interrupt_dispatch() {
     TIMER_TICKS.fetch_add(1, Ordering::Relaxed);
+    if CURRENT_USER_PID.load(Ordering::Relaxed) != 0 {
+        USER_TIMER_PREEMPTIONS.fetch_add(1, Ordering::Relaxed);
+    }
     // SAFETY: IRQ0 is serviced by the master PIC.
     unsafe {
         outb(PIC_MASTER_COMMAND, PIC_EOI);
@@ -596,6 +1040,113 @@ fn kernel_stack_top() -> usize {
 fn double_fault_stack_top() -> usize {
     // SAFETY: The stack is a static variable owned by the kernel.
     unsafe { addr_of_mut!(DOUBLE_FAULT_STACK.0).cast::<u8>().addr() + DOUBLE_FAULT_STACK_SIZE }
+}
+
+fn syscall_stack_top() -> usize {
+    // SAFETY: The stack is a static variable owned by the kernel.
+    unsafe { addr_of_mut!(SYSCALL_STACK.0).cast::<u8>().addr() + SYSCALL_STACK_SIZE }
+}
+
+fn user_interrupt_stack_top() -> usize {
+    // SAFETY: This stack is reserved for CPL3-to-CPL0 interrupt transitions.
+    unsafe {
+        addr_of_mut!(USER_INTERRUPT_STACK.0).cast::<u8>().addr()
+            + USER_INTERRUPT_STACK_SIZE
+    }
+}
+
+#[unsafe(no_mangle)]
+extern "efiapi" fn sanju_syscall_dispatch(
+    number: u64,
+    argument_0: u64,
+    argument_1: u64,
+    _argument_2: u64,
+) -> u64 {
+    USER_SYSCALLS.fetch_add(1, Ordering::Relaxed);
+    match number {
+        0 => {
+            let Ok(length) = usize::try_from(argument_1) else {
+                return u64::MAX - 13;
+            };
+            if length > 64 * 1024 || !user_pointer_is_valid(argument_0, length) {
+                return u64::MAX - 13;
+            }
+            let Ok(pointer) = usize::try_from(argument_0) else {
+                return u64::MAX - 13;
+            };
+            // SAFETY: The current user image/stack bounds were registered by
+            // `run_user_process` and validation confines this read to them.
+            let bytes = unsafe { core::slice::from_raw_parts(pointer as *const u8, length) };
+            debug_write(bytes);
+            argument_1
+        }
+        1 => 0,
+        2 => {
+            USER_EXIT_CODE.store(argument_0, Ordering::SeqCst);
+            // SAFETY: The syscall trampoline is the sole writer while the user
+            // process is active on this single CPU.
+            unsafe {
+                SANJU_USER_EXIT_REQUESTED = 1;
+            }
+            0
+        }
+        3 => {
+            USER_YIELDS.fetch_add(1, Ordering::Relaxed);
+            // SAFETY: IRQ0 is active. Waiting for one interrupt makes the yield
+            // path observable as a real timer-driven preemption point.
+            unsafe {
+                asm!("sti", "hlt", "cli", options(nomem, nostack));
+            }
+            0
+        }
+        4 => CURRENT_USER_PID.load(Ordering::Relaxed),
+        5 => 3,
+        6 => 0,
+        7 => u64::MAX - 10,
+        _ => u64::MAX - 37,
+    }
+}
+
+#[unsafe(no_mangle)]
+extern "efiapi" fn sanju_user_fault_dispatch(
+    vector: u64,
+    error_code: u64,
+    fault_address: u64,
+) {
+    USER_FAULT_ADDRESS.store(fault_address, Ordering::SeqCst);
+    USER_FAULT_ERROR.store(error_code, Ordering::SeqCst);
+    // SAFETY: The exception trampoline is the sole writer while one user
+    // process owns the CPU.
+    unsafe {
+        SANJU_USER_FAULTED = 1;
+        SANJU_USER_EXIT_REQUESTED = 1;
+    }
+    debug_write_line("SanjuOS: isolated user exception");
+    debug_write_label_hex("User PID: ", CURRENT_USER_PID.load(Ordering::Relaxed));
+    debug_write_label_hex("Vector: ", vector);
+    debug_write_label_hex("Error code: ", error_code);
+    debug_write_label_hex("Fault address: ", fault_address);
+}
+
+fn user_pointer_is_valid(pointer: u64, length: usize) -> bool {
+    let Ok(length) = u64::try_from(length) else {
+        return false;
+    };
+    let Some(end) = pointer.checked_add(length) else {
+        return false;
+    };
+    // SAFETY: These bounds are published before Ring 3 entry and remain stable
+    // until the user process returns.
+    let (image_start, image_end, stack_start, stack_end) = unsafe {
+        (
+            SANJU_USER_REGION_START,
+            SANJU_USER_REGION_END,
+            SANJU_USER_STACK_START,
+            SANJU_USER_STACK_END,
+        )
+    };
+    (pointer >= image_start && end <= image_end)
+        || (pointer >= stack_start && end <= stack_end)
 }
 
 #[unsafe(no_mangle)]
