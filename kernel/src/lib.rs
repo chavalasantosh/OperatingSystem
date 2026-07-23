@@ -134,7 +134,11 @@ pub fn kernel_main(console: &mut dyn Console, boot_info: BootInfo, report: M2Rep
     console.write_str("Firmware: ");
     console.write_line(boot_info.firmware);
     console.write_line("Firmware boot services: exited");
-    write_state(console, "Protected kernel stack", report.kernel_stack_active);
+    write_state(
+        console,
+        "Protected kernel stack",
+        report.kernel_stack_active,
+    );
     write_state(console, "GDT", report.gdt_active);
     write_state(console, "TSS", report.tss_active);
     write_state(console, "IDT exception handling", report.idt_active);
@@ -228,7 +232,11 @@ mod tests {
         kernel_main(&mut console, info, sample_report());
 
         assert!(console.output.contains("SanjuOS\r\n"));
-        assert!(console.output.contains("Protected kernel stack: active\r\n"));
+        assert!(
+            console
+                .output
+                .contains("Protected kernel stack: active\r\n")
+        );
         assert!(console.output.contains("GDT: active\r\n"));
         assert!(console.output.contains("TSS: active\r\n"));
         assert!(

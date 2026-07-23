@@ -104,8 +104,7 @@ impl FrameAllocator {
         while self.descriptor_index < self.map.descriptor_count {
             // SAFETY: `Self` can only be created through `from_memory_map`,
             // which validates and retains the memory-map contract.
-            let descriptor =
-                unsafe { read_descriptor(self.map, self.descriptor_index).ok()? };
+            let descriptor = unsafe { read_descriptor(self.map, self.descriptor_index).ok()? };
 
             if descriptor.memory_type != EFI_CONVENTIONAL_MEMORY
                 || self.frame_index >= descriptor.number_of_pages
@@ -325,7 +324,9 @@ mod tests {
         // SAFETY: The local storage is exclusively owned for the test.
         unsafe { heap.initialize(storage.as_mut_ptr().addr(), storage.len()) }.unwrap();
 
-        let first = heap.allocate(Layout::from_size_align(7, 8).unwrap()).unwrap();
+        let first = heap
+            .allocate(Layout::from_size_align(7, 8).unwrap())
+            .unwrap();
         let second = heap
             .allocate(Layout::from_size_align(16, 16).unwrap())
             .unwrap();

@@ -223,11 +223,7 @@ pub unsafe fn initialize() -> CpuProtectionReport {
 
 unsafe fn install_gdt_and_tss() {
     let tss = TaskStateSegment {
-        privilege_stack_table: [
-            u64::try_from(kernel_stack_top()).unwrap_or(u64::MAX),
-            0,
-            0,
-        ],
+        privilege_stack_table: [u64::try_from(kernel_stack_top()).unwrap_or(u64::MAX), 0, 0],
         interrupt_stack_table: [
             u64::try_from(double_fault_stack_top()).unwrap_or(u64::MAX),
             0,
@@ -292,10 +288,7 @@ unsafe fn install_gdt_and_tss() {
 unsafe fn install_idt() {
     let mut idt = [IdtEntry::missing(); IDT_ENTRY_COUNT];
     idt[3] = IdtEntry::interrupt_gate(handler_address(sanju_breakpoint_stub), 0);
-    idt[8] = IdtEntry::interrupt_gate(
-        handler_address(sanju_double_fault_stub),
-        DOUBLE_FAULT_IST,
-    );
+    idt[8] = IdtEntry::interrupt_gate(handler_address(sanju_double_fault_stub), DOUBLE_FAULT_IST);
     idt[13] = IdtEntry::interrupt_gate(handler_address(sanju_general_protection_stub), 0);
     idt[14] = IdtEntry::interrupt_gate(handler_address(sanju_page_fault_stub), 0);
 
@@ -305,8 +298,7 @@ unsafe fn install_idt() {
     }
 
     let idtr = DescriptorTablePointer {
-        limit: u16::try_from(size_of::<[IdtEntry; IDT_ENTRY_COUNT]>() - 1)
-            .unwrap_or(u16::MAX),
+        limit: u16::try_from(size_of::<[IdtEntry; IDT_ENTRY_COUNT]>() - 1).unwrap_or(u16::MAX),
         base: u64::try_from(addr_of!(IDT).addr()).unwrap_or(u64::MAX),
     };
 
@@ -333,11 +325,11 @@ fn tss_descriptor(base: u64) -> (u64, u64) {
 }
 
 fn kernel_stack_top() -> usize {
-    addr_of_mut!(KERNEL_STACK.0).cast::<u8>().addr() + KERNEL_STACK_SIZE
+    unsafe { addr_of_mut!(KERNEL_STACK.0).cast::<u8>().addr() + KERNEL_STACK_SIZE }
 }
 
 fn double_fault_stack_top() -> usize {
-    addr_of_mut!(DOUBLE_FAULT_STACK.0).cast::<u8>().addr() + DOUBLE_FAULT_STACK_SIZE
+    unsafe { addr_of_mut!(DOUBLE_FAULT_STACK.0).cast::<u8>().addr() + DOUBLE_FAULT_STACK_SIZE }
 }
 
 #[unsafe(no_mangle)]

@@ -290,7 +290,9 @@ extern "efiapi" fn efi_main(
     );
     // SAFETY: Single-core early boot has exclusive ownership of this slot.
     unsafe {
-        addr_of_mut!(BOOT_INFO_SLOT).cast::<BootInfo>().write(boot_info);
+        addr_of_mut!(BOOT_INFO_SLOT)
+            .cast::<BootInfo>()
+            .write(boot_info);
         cpu::switch_to_kernel_stack(sanju_m2_kernel_entry);
     }
 }
@@ -307,18 +309,18 @@ extern "efiapi" fn sanju_m2_kernel_entry() -> ! {
     let cpu_report = unsafe { cpu::initialize() };
 
     // SAFETY: The map is retained in static boot storage for the kernel's life.
-    let mut frame_allocator =
-        match unsafe { FrameAllocator::from_memory_map(boot_info.memory_map) } {
-            Ok(allocator) => allocator,
-            Err(_) => {
-                console.write_line("FATAL: physical frame allocator initialization failed.");
-                #[cfg(feature = "qemu-test")]
-                qemu::exit_failure();
+    let mut frame_allocator = match unsafe { FrameAllocator::from_memory_map(boot_info.memory_map) }
+    {
+        Ok(allocator) => allocator,
+        Err(_) => {
+            console.write_line("FATAL: physical frame allocator initialization failed.");
+            #[cfg(feature = "qemu-test")]
+            qemu::exit_failure();
 
-                #[cfg(not(feature = "qemu-test"))]
-                halt_forever();
-            }
-        };
+            #[cfg(not(feature = "qemu-test"))]
+            halt_forever();
+        }
+    };
 
     let usable_frames =
         usize::try_from(frame_allocator.total_usable_frames()).unwrap_or(usize::MAX);
@@ -334,7 +336,7 @@ extern "efiapi" fn sanju_m2_kernel_entry() -> ! {
     }
 
     let mut heap = BumpAllocator::new();
-    let heap_start = addr_of_mut!(KERNEL_HEAP_STORAGE.0).cast::<u8>().addr();
+    let heap_start = unsafe { addr_of_mut!(KERNEL_HEAP_STORAGE.0).cast::<u8>().addr() };
     // SAFETY: The static heap range is mapped, writable, and exclusively owned
     // by the bootstrap allocator during this single-core phase.
     if unsafe { heap.initialize(heap_start, KERNEL_HEAP_SIZE) }.is_err() {
@@ -375,8 +377,7 @@ extern "efiapi" fn sanju_m2_kernel_entry() -> ! {
         idt_active: cpu_report.idt_active,
         breakpoint_self_test_passed: cpu_report.breakpoint_self_test_passed,
         usable_frames,
-        allocated_frames: usize::try_from(frame_allocator.allocated_frames())
-            .unwrap_or(usize::MAX),
+        allocated_frames: usize::try_from(frame_allocator.allocated_frames()).unwrap_or(usize::MAX),
         heap_allocations: heap.allocations(),
         heap_remaining_bytes: heap.remaining_bytes(),
     };
