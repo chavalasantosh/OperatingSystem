@@ -60,6 +60,11 @@ impl FrameAllocator {
     /// `map.buffer_address` must remain readable for `map.map_size` bytes and
     /// each descriptor must use the declared UEFI descriptor stride. The boot
     /// layer guarantees this by retaining the map in static storage.
+    /// # Errors
+    ///
+    /// Returns `MemoryError::InvalidMemoryMap` if the map is structurally
+    /// invalid or uses an unsupported descriptor size. Returns
+    /// `MemoryError::AddressOverflow` if the total frame count overflows.
     pub unsafe fn from_memory_map(map: MemoryMapInfo) -> Result<Self, MemoryError> {
         if !map.is_structurally_valid() || map.descriptor_size < 40 {
             return Err(MemoryError::InvalidMemoryMap);
@@ -156,6 +161,11 @@ impl BumpAllocator {
     /// The caller must guarantee exclusive access to `[heap_start, heap_start +
     /// heap_size)` for the allocator's lifetime and that the range is mapped as
     /// writable memory.
+    /// # Errors
+    ///
+    /// Returns `MemoryError::HeapAlreadyInitialized` if called more than once.
+    /// Returns `MemoryError::InvalidHeapRange` or `MemoryError::AddressOverflow`
+    /// if the range is empty or its end address overflows.
     pub unsafe fn initialize(
         &mut self,
         heap_start: usize,
