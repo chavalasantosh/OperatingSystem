@@ -258,7 +258,8 @@ extern "efiapi" fn efi_main(
 
     let snapshot = match exit_firmware(image_handle, get_memory_map, exit_boot_services) {
         Ok(snapshot) => snapshot,
-        Err(_status) => {
+        Err(status) => {
+            let _ = status; // prevent unused variable warning under qemu-test
             pre_exit.write_line("FATAL: firmware ownership transition failed.");
             #[cfg(feature = "qemu-test")]
             qemu::exit_failure();
