@@ -39,6 +39,23 @@ USER_BUILD = ROOT / "scripts/build-user-programs.sh"
 SETUP = ROOT / "scripts/setup.sh"
 SOURCE_MANIFEST = ROOT / "SOURCE_MANIFEST.sha256"
 
+MANIFEST_BINARY_SUFFIXES = {
+    ".elf", ".png", ".jpg", ".jpeg", ".gif",
+    ".bmp", ".ico", ".woff", ".woff2", ".ttf", ".otf",
+}
+
+
+def source_digest(path: Path) -> str:
+    data = path.read_bytes()
+
+    # Text files are hashed with canonical LF line endings so Windows and
+    # Linux produce the same source-manifest digest.
+    if path.suffix.lower() not in MANIFEST_BINARY_SUFFIXES:
+        data = data.replace(b"\r\n", b"\n").replace(b"\r", b"\n")
+
+    return hashlib.sha256(data).hexdigest()
+
+
 
 def require(text: str, needle: str, source: Path) -> None:
     if needle not in text:
@@ -250,7 +267,7 @@ def validate_source_manifest() -> None:
         )
 
     for path, expected_digest in expected.items():
-        actual_digest = hashlib.sha256(path.read_bytes()).hexdigest()
+        actual_digest = source_digest(path)
         if actual_digest != expected_digest:
             raise AssertionError(f"source manifest digest mismatch: {path.relative_to(ROOT)}")
 
