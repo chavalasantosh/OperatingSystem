@@ -277,7 +277,10 @@ mod tests {
         let page = VirtualPage::containing(0x400000);
         let frame = PhysicalFrame::from_start_address(0x200000).unwrap();
         let flags = PageFlags::WRITABLE;
-        assert_eq!(manager.map(page, frame, flags), Err(PagingError::WriteExecuteViolation));
+        assert_eq!(
+            manager.map(page, frame, flags),
+            Err(PagingError::WriteExecuteViolation)
+        );
 
         let safe = PageFlags::WRITABLE.union(PageFlags::NO_EXECUTE);
         manager.map(page, frame, safe).unwrap();

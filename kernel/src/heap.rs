@@ -115,9 +115,11 @@ impl KernelHeap {
     /// of an active allocation.
     pub fn deallocate(&mut self, pointer: NonNull<u8>) -> Result<(), HeapError> {
         let address = pointer.as_ptr().addr();
-        let Some(index) = self.regions.iter().position(|region| {
-            region.occupied && !region.free && region.start == address
-        }) else {
+        let Some(index) = self
+            .regions
+            .iter()
+            .position(|region| region.occupied && !region.free && region.start == address)
+        else {
             return Err(HeapError::UnknownAllocation);
         };
         self.regions[index].free = true;
@@ -200,10 +202,7 @@ impl KernelHeap {
                     .start
                     .saturating_add(self.regions[left].size);
                 for right in 0..self.regions.len() {
-                    if left == right
-                        || !self.regions[right].occupied
-                        || !self.regions[right].free
-                    {
+                    if left == right || !self.regions[right].occupied || !self.regions[right].free {
                         continue;
                     }
                     if left_end == self.regions[right].start {

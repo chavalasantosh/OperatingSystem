@@ -206,11 +206,7 @@ impl UserMemory {
     /// # Errors
     ///
     /// Returns [`SyscallError::InvalidPointer`] when validation fails.
-    pub unsafe fn copy_to_user(
-        &self,
-        pointer: usize,
-        source: &[u8],
-    ) -> Result<(), SyscallError> {
+    pub unsafe fn copy_to_user(&self, pointer: usize, source: &[u8]) -> Result<(), SyscallError> {
         if !self.validates_write(pointer, source.len()) {
             return Err(SyscallError::InvalidPointer);
         }
@@ -323,9 +319,7 @@ impl SyscallDispatcher {
                 SyscallAction::Return(i64::try_from(bytes.len()).unwrap_or(i64::MAX))
             }
             SyscallNumber::Read => SyscallAction::Return(0),
-            SyscallNumber::Exit => {
-                SyscallAction::Exit(i32::try_from(arg0).unwrap_or(i32::MAX))
-            }
+            SyscallNumber::Exit => SyscallAction::Exit(i32::try_from(arg0).unwrap_or(i32::MAX)),
             SyscallNumber::Yield => SyscallAction::Yield,
             SyscallNumber::GetPid => SyscallAction::Return(i64::from(self.pid)),
             SyscallNumber::Open => {
