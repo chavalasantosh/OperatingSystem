@@ -410,7 +410,7 @@ extern "efiapi" fn sanju_m5_kernel_entry() -> ! {
         .is_err();
 
     let mut heap = KernelHeap::new();
-    let heap_start = addr_of_mut!(KERNEL_HEAP_STORAGE.0).cast::<u8>().addr();
+    let heap_start = unsafe { addr_of_mut!(KERNEL_HEAP_STORAGE.0).cast::<u8>().addr() };
     // SAFETY: Static heap storage is mapped, writable, and exclusively owned.
     if unsafe { heap.initialize(heap_start, KERNEL_HEAP_SIZE) }.is_err() {
         boot_failure(
@@ -437,9 +437,9 @@ extern "efiapi" fn sanju_m5_kernel_entry() -> ! {
     }
     startup::print_stage(&mut console, StartupStage::Heap, true);
 
-    let init_image_pointer = addr_of_mut!(USER_INIT_IMAGE.0).cast::<u8>();
-    let hello_image_pointer = addr_of_mut!(USER_HELLO_IMAGE.0).cast::<u8>();
-    let fault_image_pointer = addr_of_mut!(USER_FAULT_IMAGE.0).cast::<u8>();
+    let init_image_pointer = unsafe { addr_of_mut!(USER_INIT_IMAGE.0).cast::<u8>() };
+    let hello_image_pointer = unsafe { addr_of_mut!(USER_HELLO_IMAGE.0).cast::<u8>() };
+    let fault_image_pointer = unsafe { addr_of_mut!(USER_FAULT_IMAGE.0).cast::<u8>() };
     // SAFETY: The three static image slots are disjoint and exclusively owned.
     let init_image =
         unsafe { core::slice::from_raw_parts_mut(init_image_pointer, USER_IMAGE_SIZE) };
@@ -460,9 +460,9 @@ extern "efiapi" fn sanju_m5_kernel_entry() -> ! {
         boot_failure(&mut console, "M5-ELF-003", "fault-test ELF load failed");
     };
 
-    let init_stack_base = addr_of_mut!(USER_INIT_STACK.0).cast::<u8>().addr();
-    let hello_stack_base = addr_of_mut!(USER_HELLO_STACK.0).cast::<u8>().addr();
-    let fault_stack_base = addr_of_mut!(USER_FAULT_STACK.0).cast::<u8>().addr();
+    let init_stack_base = unsafe { addr_of_mut!(USER_INIT_STACK.0).cast::<u8>().addr() };
+    let hello_stack_base = unsafe { addr_of_mut!(USER_HELLO_STACK.0).cast::<u8>().addr() };
+    let fault_stack_base = unsafe { addr_of_mut!(USER_FAULT_STACK.0).cast::<u8>().addr() };
     let stack_pages = USER_STACK_SIZE / usize::try_from(PAGE_SIZE).unwrap_or(4096);
     let Ok(init_stack) = GuardedStack::new(
         u64::try_from(init_stack_base).unwrap_or(u64::MAX),

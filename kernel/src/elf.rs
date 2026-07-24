@@ -121,12 +121,7 @@ pub fn load_position_independent(
 
     destination[..image_size].fill(0);
     for index in 0..program_header_count {
-        let segment = read_program_header(
-            elf,
-            program_header_offset,
-            program_header_size,
-            index,
-        )?;
+        let segment = read_program_header(elf, program_header_offset, program_header_size, index)?;
         if segment.kind != PT_LOAD {
             continue;
         }
@@ -138,7 +133,8 @@ pub fn load_position_independent(
         )
         .map_err(|_| ElfError::ImageTooLarge)?;
         let file_size = usize::try_from(segment.file_size).map_err(|_| ElfError::ImageTooLarge)?;
-        let source_offset = usize::try_from(segment.offset).map_err(|_| ElfError::InvalidSegment)?;
+        let source_offset =
+            usize::try_from(segment.offset).map_err(|_| ElfError::InvalidSegment)?;
         let source_end = source_offset
             .checked_add(file_size)
             .ok_or(ElfError::InvalidSegment)?;
@@ -157,7 +153,8 @@ pub fn load_position_independent(
     let entry_offset_u64 = entry
         .checked_sub(minimum_address)
         .ok_or(ElfError::EntryOutsideImage)?;
-    let entry_offset = usize::try_from(entry_offset_u64).map_err(|_| ElfError::EntryOutsideImage)?;
+    let entry_offset =
+        usize::try_from(entry_offset_u64).map_err(|_| ElfError::EntryOutsideImage)?;
     if entry_offset >= image_size {
         return Err(ElfError::EntryOutsideImage);
     }
@@ -197,7 +194,12 @@ fn read_program_header(
         .and_then(|value| table_offset.checked_add(value))
         .ok_or(ElfError::InvalidHeader)?;
     let header = elf
-        .get(offset..offset.checked_add(PROGRAM_HEADER_SIZE).ok_or(ElfError::InvalidHeader)?)
+        .get(
+            offset
+                ..offset
+                    .checked_add(PROGRAM_HEADER_SIZE)
+                    .ok_or(ElfError::InvalidHeader)?,
+        )
         .ok_or(ElfError::Truncated)?;
     Ok(ProgramHeader {
         kind: read_u32(header, 0)?,
