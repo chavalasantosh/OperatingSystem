@@ -55,16 +55,25 @@ grep -Fq "Milestone M5: protected user-space foundation and branded startup." bu
 grep -Fq "init: SanjuOS protected userspace online" build/qemu-debug.log
 grep -Fq "hello: running from SanjuOS Ring 3" build/qemu-debug.log
 grep -Fq "SanjuOS: isolated user exception" build/qemu-debug.log
-grep -Fq "Paging ownership: active" build/qemu-debug.log
+grep -Fq "Inherited page-table root captured: active" build/qemu-debug.log
 grep -Fq "Kernel heap: active" build/qemu-debug.log
 grep -Fq "Ring 3 execution: active" build/qemu-debug.log
-grep -Fq "User address-space isolation: active" build/qemu-debug.log
+grep -Fq "User address-space model: active" build/qemu-debug.log
 grep -Fq "System-call interface: active" build/qemu-debug.log
 grep -Fq "ELF64 loader: active" build/qemu-debug.log
 grep -Fq "User processes launched: 3" build/qemu-debug.log
 grep -Fq "User fault isolation: passed" build/qemu-debug.log
 grep -Fq "SanjuOS logo print: active" build/qemu-debug.log
 grep -Fq "M5 protected user-space gate: passed" build/qemu-debug.log
+while IFS= read -r expected_line; do
+  [[ -z "$expected_line" || "$expected_line" == \#* ]] && continue
+  grep -Fq "$expected_line" build/qemu-debug.log
+done < capabilities/smoke-expectations.txt
+grep -Fq "Reserved-range overlap test: passed" build/qemu-debug.log
+grep -Fq "Double-free detection: passed" build/qemu-debug.log
+grep -Fq "Reserved-frame protection: passed" build/qemu-debug.log
+grep -Fq "M5 regression boot: passed" build/qemu-debug.log
+grep -Fq "Foundation hardening phase 1: passed" build/qemu-debug.log
 grep -Fq "SanjuOS kernel shell ready." build/qemu-debug.log
 grep -Fq "M5 protected userspace, syscalls, and ELF loader are active." build/qemu-debug.log
 

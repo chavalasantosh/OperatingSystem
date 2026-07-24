@@ -63,4 +63,25 @@ UEFI -> retained memory map -> ExitBootServices -> kernel stack
      -> kernel acceptance report -> interactive shell
 ```
 
-The M5 platform path runs one user program at a time on the bootstrap CPU. The architecture-independent process and paging objects define the intended long-term contract. M6 replaces firmware-derived shared mappings with activated process-owned page tables and complete preemptive contexts.
+The M5 platform path runs one user program at a time on the bootstrap CPU. The architecture-independent process and paging objects define the intended long-term contract.
+
+## Foundation hardening boundary
+
+```text
+UEFI system table and loaded-image protocol
+    -> BootInfoV1
+       - retained UEFI memory map
+       - loaded EFI image range
+       - active CR3 root
+       - ACPI and SMBIOS entry addresses
+       - optional GOP framebuffer metadata
+    -> physical ownership map
+    -> bitmap frame allocator
+    -> reserved page-table bootstrap pool
+    -> unchanged M5 execution regression
+```
+
+Phase 1 deliberately does not reload `CR3`. The next memory phase builds a fresh
+SanjuOS PML4, maps every live kernel and platform range explicitly, validates the
+new hierarchy, and only then retires firmware-derived mappings. Full process
+preemption and private address spaces remain blocked on that gate.

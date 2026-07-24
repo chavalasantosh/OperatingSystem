@@ -6,8 +6,8 @@
 - Architecture: x86-64
 - Firmware: UEFI 2.x
 - Primary language: Rust 2024
-- Current checkpoint: 0.0.5-prealpha / M5-alpha
-- Accepted releases: M1, M2, M3, and M4
+- Current checkpoint: Foundation Hardening Phase 1 after `v0.0.5-m5`
+- Accepted releases: M1, M2, M3, M4, and tagged M5 (`v0.0.5-m5`)
 - Deployment policy: QEMU only until physical-install safety gates pass
 
 ## Mission
@@ -20,8 +20,8 @@ Development is grouped into major milestone batches. Small formatting or CI corr
 
 ## Current objective
 
-Pass the single M5 quality and QEMU gate for paging policy, reusable allocation, Ring 3 execution, syscalls, ELF loading, process/fault handling, and branded startup.
+Freeze the build, capability, architecture, boot-handoff, physical-ownership, frame-allocation, and page-table-bootstrap contracts while preserving the complete M5 regression boot.
 
 ## Next major objective
 
-After M5 acceptance, build hardware-owned process page tables and context switching, then move into PCI/storage discovery, a VFS, persistent filesystem, framebuffer graphics, and the first compositor.
+Construct and activate a fresh SanjuOS PML4 with a hardware-backed mapper and real guard holes. Private process CR3 roots and complete saved-register context switching follow before PCI/storage, VFS, persistent filesystems, or compositor work.

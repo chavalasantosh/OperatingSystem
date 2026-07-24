@@ -1,0 +1,136 @@
+registry_version = 1
+
+[[capability]]
+id = "SYS-TC-001"
+name = "Pinned Rust toolchain"
+status = "verified"
+milestone = "foundation-hardening-1"
+evidence = ["rust-toolchain.toml", ".github/workflows/ci.yml"]
+boot_label = "Pinned toolchain"
+required_boot_line = "Pinned toolchain: verified"
+
+[[capability]]
+id = "SYS-CAP-001"
+name = "Generated capability registry"
+status = "verified"
+milestone = "foundation-hardening-1"
+evidence = ["capabilities/capabilities.toml", "scripts/generate-capabilities.py"]
+boot_label = "Capability registry"
+required_boot_line = "Capability registry: synchronized"
+
+[[capability]]
+id = "SYS-ARCH-001"
+name = "Architecture-specific code separated from boot orchestration"
+status = "verified"
+milestone = "foundation-hardening-1"
+evidence = ["boot/uefi/src/arch/x86_64/", "scripts/source-check.py"]
+boot_label = "Architecture separation"
+required_boot_line = "Architecture separation: verified"
+
+[[capability]]
+id = "BOOT-INFO-001"
+name = "Versioned BootInfo v1 handoff"
+status = "verified"
+milestone = "foundation-hardening-1"
+evidence = ["kernel/src/boot_info.rs", "boot/uefi/src/main.rs"]
+boot_label = "BootInfo v1"
+required_boot_line = "BootInfo version: 1"
+
+[[capability]]
+id = "MEM-OWN-001"
+name = "Physical memory ownership map"
+status = "hardware_active"
+milestone = "foundation-hardening-1"
+evidence = ["kernel/src/ownership.rs", "kernel/src/memory.rs"]
+boot_label = "Physical ownership map"
+required_boot_line = "Physical ownership map: active"
+
+[[capability]]
+id = "MEM-PF-001"
+name = "Bitmap physical frame allocator with alloc and free"
+status = "hardware_active"
+milestone = "foundation-hardening-1"
+evidence = ["kernel/src/memory.rs"]
+boot_label = "Bitmap frame allocator"
+required_boot_line = "Frame allocation/free test: passed"
+
+[[capability]]
+id = "MEM-PTB-001"
+name = "Dedicated page-table bootstrap pool"
+status = "hardware_active"
+milestone = "foundation-hardening-1"
+evidence = ["kernel/src/memory.rs"]
+boot_label = "Page-table bootstrap pool"
+required_boot_line = "Page-table bootstrap pool: active"
+
+[[capability]]
+id = "MEM-VM-001"
+name = "Hardware four-level page-table manager"
+status = "acceptance_prototype"
+milestone = "m5"
+evidence = ["kernel/src/paging.rs", "boot/uefi/src/arch/x86_64/mod.rs"]
+boot_label = "Four-level page-table manager"
+
+[[capability]]
+id = "MEM-GUARD-001"
+name = "Hardware-unmapped guard pages"
+status = "software_model"
+milestone = "m5"
+evidence = ["kernel/src/paging.rs"]
+boot_label = "Guarded-stack layout"
+
+[[capability]]
+id = "MEM-RECLAIM-001"
+name = "Boot-service memory reclaim"
+status = "software_model"
+milestone = "m5"
+evidence = ["kernel/src/memory.rs"]
+boot_label = "Boot-service reclaim inventory"
+
+[[capability]]
+id = "PROC-R3-001"
+name = "Ring 3 privilege transition"
+status = "hardware_active"
+milestone = "m5"
+evidence = ["boot/uefi/src/arch/x86_64/mod.rs", "user/programs/src/"]
+boot_label = "Ring 3 execution"
+
+[[capability]]
+id = "PROC-AS-001"
+name = "Private process CR3 isolation"
+status = "software_model"
+milestone = "m5"
+evidence = ["kernel/src/process.rs"]
+boot_label = "User address-space model"
+
+[[capability]]
+id = "SCHED-PRE-001"
+name = "Full register-context preemptive scheduling"
+status = "software_model"
+milestone = "m5"
+evidence = ["kernel/src/process.rs", "kernel/src/scheduler.rs"]
+boot_label = "Timer-driven scheduling model"
+
+[[capability]]
+id = "SYS-SYSCALL-001"
+name = "x86-64 syscall entry and return"
+status = "hardware_active"
+milestone = "m5"
+evidence = ["boot/uefi/src/arch/x86_64/mod.rs", "kernel/src/syscall.rs"]
+boot_label = "System-call interface"
+
+[[capability]]
+id = "EXEC-ELF-001"
+name = "ELF64 position-independent loader"
+status = "hardware_active"
+milestone = "m5"
+evidence = ["kernel/src/elf.rs", "user/programs/bin/"]
+boot_label = "ELF64 loader"
+
+[[capability]]
+id = "GFX-BOOT-001"
+name = "Graphical framebuffer startup splash"
+status = "planned"
+milestone = "m6"
+evidence = ["assets/branding/sanjuos-logo.png"]
+boot_label = "Graphical startup"

@@ -1,7 +1,11 @@
 #![cfg_attr(not(test), no_std)]
 #![allow(clippy::pedantic)]
 
+pub mod boot_info;
+pub mod capabilities;
 pub mod elf;
+pub mod generated;
+pub mod ownership;
 pub mod fs;
 pub mod heap;
 pub mod input;
@@ -58,54 +62,7 @@ pub trait Console {
     }
 }
 
-/// Firmware memory map retained after UEFI boot services are terminated.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct MemoryMapInfo {
-    pub buffer_address: usize,
-    pub buffer_capacity: usize,
-    pub map_size: usize,
-    pub map_key: usize,
-    pub descriptor_size: usize,
-    pub descriptor_version: u32,
-    pub descriptor_count: usize,
-}
-
-impl MemoryMapInfo {
-    #[must_use]
-    pub const fn is_structurally_valid(self) -> bool {
-        self.buffer_address != 0
-            && self.map_size <= self.buffer_capacity
-            && self.descriptor_size != 0
-            && self.map_size.is_multiple_of(self.descriptor_size)
-            && self.descriptor_count == self.map_size / self.descriptor_size
-    }
-}
-
-/// Owned facts transferred from the platform boot layer into the kernel.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct BootInfo {
-    pub architecture: &'static str,
-    pub firmware: &'static str,
-    pub milestone: &'static str,
-    pub memory_map: MemoryMapInfo,
-}
-
-impl BootInfo {
-    #[must_use]
-    pub const fn new(
-        architecture: &'static str,
-        firmware: &'static str,
-        milestone: &'static str,
-        memory_map: MemoryMapInfo,
-    ) -> Self {
-        Self {
-            architecture,
-            firmware,
-            milestone,
-            memory_map,
-        }
-    }
-}
+pub use boot_info::{BootInfo, BootInfoV1, MemoryMapInfo};
 
 /// Runtime evidence produced by the combined M3/M4 kernel batch.
 #[allow(clippy::struct_excessive_bools)]
@@ -168,11 +125,11 @@ impl M4Report {
 pub fn kernel_main(console: &mut dyn Console, boot_info: BootInfo, report: M4Report) {
     console.write_line("");
     console.write_line("SanjuOS");
-    console.write_line(boot_info.milestone);
+    console.write_line(boot_info.milestone());
     console.write_str("Architecture: ");
-    console.write_line(boot_info.architecture);
+    console.write_line(boot_info.architecture());
     console.write_str("Firmware: ");
-    console.write_line(boot_info.firmware);
+    console.write_line(boot_info.firmware());
     console.write_line("Firmware boot services: exited");
     write_state(
         console,
@@ -316,28 +273,28 @@ impl M5Report {
 pub fn kernel_main_m5(console: &mut dyn Console, boot_info: BootInfo, report: M5Report) {
     startup::print_logo(console);
     console.write_line("SanjuOS M5");
-    console.write_line(boot_info.milestone);
+    console.write_line(boot_info.milestone());
     console.write_str("Architecture: ");
-    console.write_line(boot_info.architecture);
+    console.write_line(boot_info.architecture());
     console.write_str("Firmware: ");
-    console.write_line(boot_info.firmware);
-    write_state(console, "Paging ownership", report.paging_ownership_active);
+    console.write_line(boot_info.firmware());
+    write_state(console, "Inherited page-table root captured", report.paging_ownership_active);
     console.write_str("Active page-table root: 0x");
     write_hex_u64(console, report.active_page_table_root);
     console.write_line("");
     write_state(
         console,
-        "Four-level page-table manager",
+        "Page-table mapping acceptance model",
         report.four_level_paging_active,
     );
     write_state(console, "Page map/unmap API", report.mapping_api_active);
     write_state(console, "Page protection flags", report.page_flags_active);
     write_state(
         console,
-        "Boot-service memory reclaim",
+        "Boot-service reclaim inventory",
         report.boot_memory_reclaim_active,
     );
-    write_state(console, "Guard pages", report.guard_pages_active);
+    write_state(console, "Guarded-stack layout", report.guard_pages_active);
     write_state(
         console,
         "W^X memory security",
@@ -358,7 +315,7 @@ pub fn kernel_main_m5(console: &mut dyn Console, boot_info: BootInfo, report: M5
     write_state(console, "Ring 3 execution", report.ring3_execution_active);
     write_state(
         console,
-        "User address-space isolation",
+        "User address-space model",
         report.user_address_space_isolation_active,
     );
     write_state(console, "Guarded user stacks", report.user_stacks_active);
@@ -369,12 +326,12 @@ pub fn kernel_main_m5(console: &mut dyn Console, boot_info: BootInfo, report: M5
     );
     write_state(
         console,
-        "Real CPU context model",
+        "Saved CPU context model",
         report.context_switching_active,
     );
     write_state(
         console,
-        "Preemptive scheduling",
+        "Timer-driven scheduling model",
         report.preemptive_scheduling_active,
     );
     write_state(
@@ -408,11 +365,122 @@ pub fn kernel_main_m5(console: &mut dyn Console, boot_info: BootInfo, report: M5
 
     if report.gate_passed() {
         console.write_line("M5 protected user-space gate: passed");
-        console.write_line(
-            "Next gate: storage drivers, persistent filesystem, and graphics compositor",
-        );
+        console.write_line("M5 regression status: preserved for foundation hardening");
     } else {
         console.write_line("M5 protected user-space gate: failed");
+    }
+}
+
+/// Runtime evidence for Foundation Hardening Phase 1.
+#[allow(clippy::struct_excessive_bools)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct FoundationHardeningReport {
+    pub toolchain_pinned: bool,
+    pub capability_registry_synchronized: bool,
+    pub architecture_separation_verified: bool,
+    pub boot_info_version: u32,
+    pub ownership_map_active: bool,
+    pub ownership_ranges: usize,
+    pub overlap_detection_passed: bool,
+    pub frame_allocation_unique: bool,
+    pub frame_reuse_passed: bool,
+    pub double_free_detection_passed: bool,
+    pub reserved_frame_detection_passed: bool,
+    pub bootstrap_pool_active: bool,
+    pub bootstrap_pool_capacity: usize,
+    pub bootstrap_pool_remaining: usize,
+    pub m5_regression_passed: bool,
+}
+
+impl FoundationHardeningReport {
+    #[must_use]
+    pub const fn gate_passed(self) -> bool {
+        self.toolchain_pinned
+            && self.capability_registry_synchronized
+            && self.architecture_separation_verified
+            && self.boot_info_version == boot_info::BOOT_INFO_VERSION
+            && self.ownership_map_active
+            && self.ownership_ranges > 0
+            && self.overlap_detection_passed
+            && self.frame_allocation_unique
+            && self.frame_reuse_passed
+            && self.double_free_detection_passed
+            && self.reserved_frame_detection_passed
+            && self.bootstrap_pool_active
+            && self.bootstrap_pool_capacity > 0
+            && self.bootstrap_pool_remaining == self.bootstrap_pool_capacity
+            && self.m5_regression_passed
+    }
+}
+
+/// Prints the Foundation Hardening Phase 1 acceptance report.
+pub fn kernel_main_foundation_hardening(
+    console: &mut dyn Console,
+    report: FoundationHardeningReport,
+) {
+    console.write_line("");
+    console.write_line("SanjuOS Foundation Hardening");
+    console.write_line(if report.toolchain_pinned {
+        "Pinned toolchain: verified"
+    } else {
+        "Pinned toolchain: failed"
+    });
+    console.write_line(if report.capability_registry_synchronized {
+        "Capability registry: synchronized"
+    } else {
+        "Capability registry: stale"
+    });
+    console.write_line(if report.architecture_separation_verified {
+        "Architecture separation: verified"
+    } else {
+        "Architecture separation: failed"
+    });
+    console.write_str("BootInfo version: ");
+    console.write_u64(u64::from(report.boot_info_version));
+    console.write_line("");
+    write_state(console, "Physical ownership map", report.ownership_map_active);
+    console.write_str("Physical ownership ranges: ");
+    console.write_usize(report.ownership_ranges);
+    console.write_line("");
+    console.write_line(if report.overlap_detection_passed {
+        "Reserved-range overlap test: passed"
+    } else {
+        "Reserved-range overlap test: failed"
+    });
+    console.write_line(if report.frame_allocation_unique && report.frame_reuse_passed {
+        "Frame allocation/free test: passed"
+    } else {
+        "Frame allocation/free test: failed"
+    });
+    console.write_line(if report.double_free_detection_passed {
+        "Double-free detection: passed"
+    } else {
+        "Double-free detection: failed"
+    });
+    console.write_line(if report.reserved_frame_detection_passed {
+        "Reserved-frame protection: passed"
+    } else {
+        "Reserved-frame protection: failed"
+    });
+    write_state(
+        console,
+        "Page-table bootstrap pool",
+        report.bootstrap_pool_active,
+    );
+    console.write_str("Page-table bootstrap frames: ");
+    console.write_usize(report.bootstrap_pool_capacity);
+    console.write_line("");
+    console.write_line(if report.m5_regression_passed {
+        "M5 regression boot: passed"
+    } else {
+        "M5 regression boot: failed"
+    });
+    capabilities::print_registry(console);
+    if report.gate_passed() {
+        console.write_line("Foundation hardening phase 1: passed");
+        console.write_line("Next gate: fresh SanjuOS PML4 and hardware page-table ownership");
+    } else {
+        console.write_line("Foundation hardening phase 1: failed");
     }
 }
 
@@ -439,7 +507,8 @@ fn write_state(console: &mut dyn Console, label: &str, active: bool) {
 #[cfg(test)]
 mod tests {
     use super::{
-        BootInfo, Console, M4Report, M5Report, MemoryMapInfo, kernel_main, kernel_main_m5,
+        BootInfo, Console, FoundationHardeningReport, M4Report, M5Report, MemoryMapInfo,
+        kernel_main, kernel_main_foundation_hardening, kernel_main_m5,
     };
     use std::string::String;
 
@@ -462,6 +531,7 @@ mod tests {
             map_key: 7,
             descriptor_size: 40,
             descriptor_version: 1,
+            reserved: 0,
             descriptor_count: 100,
         }
     }
@@ -527,6 +597,32 @@ mod tests {
     }
 
     #[test]
+    fn foundation_hardening_banner_uses_truthful_acceptance_evidence() {
+        let mut console = RecordingConsole::default();
+        let report = FoundationHardeningReport {
+            toolchain_pinned: true,
+            capability_registry_synchronized: true,
+            architecture_separation_verified: true,
+            boot_info_version: 1,
+            ownership_map_active: true,
+            ownership_ranges: 2,
+            overlap_detection_passed: true,
+            frame_allocation_unique: true,
+            frame_reuse_passed: true,
+            double_free_detection_passed: true,
+            reserved_frame_detection_passed: true,
+            bootstrap_pool_active: true,
+            bootstrap_pool_capacity: 256,
+            bootstrap_pool_remaining: 256,
+            m5_regression_passed: true,
+        };
+        kernel_main_foundation_hardening(&mut console, report);
+        assert!(report.gate_passed());
+        assert!(console.output.contains("Foundation hardening phase 1: passed\r\n"));
+        assert!(console.output.contains("Frame allocation/free test: passed\r\n"));
+    }
+
+    #[test]
     fn m5_banner_confirms_protected_userspace_gate() {
         let mut console = RecordingConsole::default();
         let info = BootInfo::new(
@@ -534,10 +630,11 @@ mod tests {
             "UEFI",
             "Milestone M5: protected user-space foundation and branded startup.",
             sample_map(),
-        );
+        )
+        .unwrap();
         kernel_main_m5(&mut console, info, sample_m5_report());
         assert!(console.output.contains("SanjuOS M5\r\n"));
-        assert!(console.output.contains("Paging ownership: active\r\n"));
+        assert!(console.output.contains("Inherited page-table root captured: active\r\n"));
         assert!(console.output.contains("Ring 3 execution: active\r\n"));
         assert!(console.output.contains("System-call interface: active\r\n"));
         assert!(console.output.contains("ELF64 loader: active\r\n"));
@@ -565,7 +662,8 @@ mod tests {
             "UEFI",
             "Milestone M4: interrupt-driven runtime and interactive kernel environment.",
             sample_map(),
-        );
+        )
+        .unwrap();
 
         kernel_main(&mut console, info, sample_report());
 
