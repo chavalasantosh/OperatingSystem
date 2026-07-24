@@ -32,16 +32,16 @@ pub const TIMER_HZ: u64 = 100;
 const KEYBOARD_DATA: u16 = 0x60;
 const SCANCODE_QUEUE_CAPACITY: usize = 256;
 
-#[repr(C, align(16))]
+#[repr(C, align(4096))]
 struct Stack([u8; KERNEL_STACK_SIZE]);
 
-#[repr(C, align(16))]
+#[repr(C, align(4096))]
 struct DoubleFaultStack([u8; DOUBLE_FAULT_STACK_SIZE]);
 
-#[repr(C, align(16))]
+#[repr(C, align(4096))]
 struct SyscallStack([u8; SYSCALL_STACK_SIZE]);
 
-#[repr(C, align(16))]
+#[repr(C, align(4096))]
 struct UserInterruptStack([u8; USER_INTERRUPT_STACK_SIZE]);
 
 static mut KERNEL_STACK: Stack = Stack([0; KERNEL_STACK_SIZE]);
@@ -1049,10 +1049,7 @@ fn syscall_stack_top() -> usize {
 
 fn user_interrupt_stack_top() -> usize {
     // SAFETY: This stack is reserved for CPL3-to-CPL0 interrupt transitions.
-    unsafe {
-        addr_of_mut!(USER_INTERRUPT_STACK.0).cast::<u8>().addr()
-            + USER_INTERRUPT_STACK_SIZE
-    }
+    unsafe { addr_of_mut!(USER_INTERRUPT_STACK.0).cast::<u8>().addr() + USER_INTERRUPT_STACK_SIZE }
 }
 
 #[unsafe(no_mangle)]
@@ -1108,11 +1105,7 @@ extern "efiapi" fn sanju_syscall_dispatch(
 }
 
 #[unsafe(no_mangle)]
-extern "efiapi" fn sanju_user_fault_dispatch(
-    vector: u64,
-    error_code: u64,
-    fault_address: u64,
-) {
+extern "efiapi" fn sanju_user_fault_dispatch(vector: u64, error_code: u64, fault_address: u64) {
     USER_FAULT_ADDRESS.store(fault_address, Ordering::SeqCst);
     USER_FAULT_ERROR.store(error_code, Ordering::SeqCst);
     // SAFETY: The exception trampoline is the sole writer while one user
@@ -1145,8 +1138,7 @@ fn user_pointer_is_valid(pointer: u64, length: usize) -> bool {
             SANJU_USER_STACK_END,
         )
     };
-    (pointer >= image_start && end <= image_end)
-        || (pointer >= stack_start && end <= stack_end)
+    (pointer >= image_start && end <= image_end) || (pointer >= stack_start && end <= stack_end)
 }
 
 #[unsafe(no_mangle)]

@@ -196,8 +196,9 @@ fn execute_line(
             let text = line.strip_prefix("echo").unwrap_or("").trim_start();
             console.write_line(text);
         }
-        "userspace" => console
-            .write_line("M5 protected userspace, syscalls, and ELF loader are active."),
+        "userspace" => {
+            console.write_line("M5 protected userspace, syscalls, and ELF loader are active.")
+        }
         "clear" => console.write_str("\x1b[2J\x1b[H"),
         _ => console.write_line("unknown command; type 'help'"),
     }

@@ -238,9 +238,8 @@ pub fn kernel_main(console: &mut dyn Console, boot_info: BootInfo, report: M4Rep
 
     if report.gate_passed() {
         console.write_line("M4 interactive runtime gate: passed");
-        console.write_line(
-            "Next gate: paging ownership, user mode, syscalls, and executable loading",
-        );
+        console
+            .write_line("Next gate: paging ownership, user mode, syscalls, and executable loading");
     } else {
         console.write_line("M4 interactive runtime gate: failed");
     }
@@ -326,19 +325,35 @@ pub fn kernel_main_m5(console: &mut dyn Console, boot_info: BootInfo, report: M5
     console.write_str("Active page-table root: 0x");
     write_hex_u64(console, report.active_page_table_root);
     console.write_line("");
-    write_state(console, "Four-level page-table manager", report.four_level_paging_active);
+    write_state(
+        console,
+        "Four-level page-table manager",
+        report.four_level_paging_active,
+    );
     write_state(console, "Page map/unmap API", report.mapping_api_active);
     write_state(console, "Page protection flags", report.page_flags_active);
-    write_state(console, "Boot-service memory reclaim", report.boot_memory_reclaim_active);
+    write_state(
+        console,
+        "Boot-service memory reclaim",
+        report.boot_memory_reclaim_active,
+    );
     write_state(console, "Guard pages", report.guard_pages_active);
-    write_state(console, "W^X memory security", report.write_xor_execute_active);
+    write_state(
+        console,
+        "W^X memory security",
+        report.write_xor_execute_active,
+    );
     write_state(console, "Kernel heap", report.kernel_heap_active);
     console.write_str("Kernel heap allocations/frees: ");
     console.write_usize(report.heap_allocations);
     console.write_str("/");
     console.write_usize(report.heap_frees);
     console.write_line("");
-    write_state(console, "Enhanced page-fault diagnostics", report.page_fault_diagnostics_active);
+    write_state(
+        console,
+        "Enhanced page-fault diagnostics",
+        report.page_fault_diagnostics_active,
+    );
     write_state(console, "User-mode GDT segments", report.user_gdt_active);
     write_state(console, "Ring 3 execution", report.ring3_execution_active);
     write_state(
@@ -347,11 +362,31 @@ pub fn kernel_main_m5(console: &mut dyn Console, boot_info: BootInfo, report: M5
         report.user_address_space_isolation_active,
     );
     write_state(console, "Guarded user stacks", report.user_stacks_active);
-    write_state(console, "Process control blocks", report.process_control_blocks_active);
-    write_state(console, "Real CPU context model", report.context_switching_active);
-    write_state(console, "Preemptive scheduling", report.preemptive_scheduling_active);
-    write_state(console, "System-call interface", report.syscall_interface_active);
-    write_state(console, "Safe user-memory access", report.safe_user_memory_active);
+    write_state(
+        console,
+        "Process control blocks",
+        report.process_control_blocks_active,
+    );
+    write_state(
+        console,
+        "Real CPU context model",
+        report.context_switching_active,
+    );
+    write_state(
+        console,
+        "Preemptive scheduling",
+        report.preemptive_scheduling_active,
+    );
+    write_state(
+        console,
+        "System-call interface",
+        report.syscall_interface_active,
+    );
+    write_state(
+        console,
+        "Safe user-memory access",
+        report.safe_user_memory_active,
+    );
     write_state(console, "ELF64 loader", report.elf64_loader_active);
     console.write_str("User processes launched: ");
     console.write_usize(report.user_programs_launched);
@@ -364,7 +399,11 @@ pub fn kernel_main_m5(console: &mut dyn Console, boot_info: BootInfo, report: M5
     } else {
         console.write_line("User fault isolation: failed");
     }
-    write_state(console, "Branded startup experience", report.startup_experience_active);
+    write_state(
+        console,
+        "Branded startup experience",
+        report.startup_experience_active,
+    );
     write_state(console, "SanjuOS logo print", report.sanjuos_brand_printed);
 
     if report.gate_passed() {

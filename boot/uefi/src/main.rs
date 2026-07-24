@@ -355,7 +355,11 @@ extern "efiapi" fn sanju_m5_kernel_entry() -> ! {
     let Ok(mut frame_allocator) =
         (unsafe { FrameAllocator::from_memory_map(boot_info.memory_map) })
     else {
-        boot_failure(&mut console, "M5-MEM-001", "frame allocator initialization failed");
+        boot_failure(
+            &mut console,
+            "M5-MEM-001",
+            "frame allocator initialization failed",
+        );
     };
     let usable_frames =
         usize::try_from(frame_allocator.total_usable_frames()).unwrap_or(usize::MAX);
@@ -379,7 +383,11 @@ extern "efiapi" fn sanju_m5_kernel_entry() -> ! {
     );
 
     let Some(mapping_frame) = frame_allocator.allocate_frame() else {
-        boot_failure(&mut console, "M5-MEM-002", "no frame for page-table API probe");
+        boot_failure(
+            &mut console,
+            "M5-MEM-002",
+            "no frame for page-table API probe",
+        );
     };
     let mut page_tables = PageTableManager::new(user_runtime.active_page_table_root);
     let mapping_page = VirtualPage::containing(KERNEL_HEAP_START);
@@ -406,7 +414,11 @@ extern "efiapi" fn sanju_m5_kernel_entry() -> ! {
     let heap_start = unsafe { addr_of_mut!(KERNEL_HEAP_STORAGE.0).cast::<u8>().addr() };
     // SAFETY: Static heap storage is mapped, writable, and exclusively owned.
     if unsafe { heap.initialize(heap_start, KERNEL_HEAP_SIZE) }.is_err() {
-        boot_failure(&mut console, "M5-HEAP-001", "kernel heap initialization failed");
+        boot_failure(
+            &mut console,
+            "M5-HEAP-001",
+            "kernel heap initialization failed",
+        );
     }
     let Ok(small_layout) = Layout::from_size_align(256, 32) else {
         boot_failure(&mut console, "M5-HEAP-002", "kernel heap layout rejected");
@@ -415,7 +427,11 @@ extern "efiapi" fn sanju_m5_kernel_entry() -> ! {
         boot_failure(&mut console, "M5-HEAP-003", "kernel heap allocation failed");
     };
     let Some(_second_allocation) = heap.allocate(small_layout) else {
-        boot_failure(&mut console, "M5-HEAP-004", "kernel heap second allocation failed");
+        boot_failure(
+            &mut console,
+            "M5-HEAP-004",
+            "kernel heap second allocation failed",
+        );
     };
     if heap.deallocate(first_allocation).is_err() || heap.allocate(small_layout).is_none() {
         boot_failure(&mut console, "M5-HEAP-005", "kernel heap reuse test failed");
@@ -429,17 +445,14 @@ extern "efiapi" fn sanju_m5_kernel_entry() -> ! {
     // SAFETY: The storage is a static variable exclusively owned by the kernel.
     let fault_image_pointer = unsafe { addr_of_mut!(USER_FAULT_IMAGE.0).cast::<u8>() };
     // SAFETY: The three static image slots are disjoint and exclusively owned.
-    let init_image = unsafe {
-        core::slice::from_raw_parts_mut(init_image_pointer, USER_IMAGE_SIZE)
-    };
+    let init_image =
+        unsafe { core::slice::from_raw_parts_mut(init_image_pointer, USER_IMAGE_SIZE) };
     // SAFETY: Same contract as above for the hello image slot.
-    let hello_image = unsafe {
-        core::slice::from_raw_parts_mut(hello_image_pointer, USER_IMAGE_SIZE)
-    };
+    let hello_image =
+        unsafe { core::slice::from_raw_parts_mut(hello_image_pointer, USER_IMAGE_SIZE) };
     // SAFETY: Same contract as above for the fault-test image slot.
-    let fault_image = unsafe {
-        core::slice::from_raw_parts_mut(fault_image_pointer, USER_IMAGE_SIZE)
-    };
+    let fault_image =
+        unsafe { core::slice::from_raw_parts_mut(fault_image_pointer, USER_IMAGE_SIZE) };
 
     let Ok(init_loaded) = load_position_independent(INIT_ELF, init_image) else {
         boot_failure(&mut console, "M5-ELF-001", "init ELF load failed");
@@ -512,12 +525,12 @@ extern "efiapi" fn sanju_m5_kernel_entry() -> ! {
         isolated: true,
     };
 
-    let init_entry = init_image_start
-        .saturating_add(u64::try_from(init_loaded.entry_offset).unwrap_or(0));
-    let hello_entry = hello_image_start
-        .saturating_add(u64::try_from(hello_loaded.entry_offset).unwrap_or(0));
-    let fault_entry = fault_image_start
-        .saturating_add(u64::try_from(fault_loaded.entry_offset).unwrap_or(0));
+    let init_entry =
+        init_image_start.saturating_add(u64::try_from(init_loaded.entry_offset).unwrap_or(0));
+    let hello_entry =
+        hello_image_start.saturating_add(u64::try_from(hello_loaded.entry_offset).unwrap_or(0));
+    let fault_entry =
+        fault_image_start.saturating_add(u64::try_from(fault_loaded.entry_offset).unwrap_or(0));
 
     let mut processes = ProcessTable::new(2);
     let Ok(init_pid) = processes.spawn(init_space, init_stack, init_entry) else {
@@ -608,8 +621,7 @@ extern "efiapi" fn sanju_m5_kernel_entry() -> ! {
         timer_hz: cpu::TIMER_HZ,
         keyboard_irqs: cpu::keyboard_irqs(),
         usable_frames,
-        allocated_frames: usize::try_from(frame_allocator.allocated_frames())
-            .unwrap_or(usize::MAX),
+        allocated_frames: usize::try_from(frame_allocator.allocated_frames()).unwrap_or(usize::MAX),
         scheduler_tasks: scheduler_stats.task_count,
         scheduler_switches: scheduler_stats.context_switches,
         scheduler_dispatches: scheduler_stats.dispatches,
@@ -623,8 +635,8 @@ extern "efiapi" fn sanju_m5_kernel_entry() -> ! {
     let elf_security = init_loaded.write_xor_execute_enforced
         && hello_loaded.write_xor_execute_enforced
         && fault_loaded.write_xor_execute_enforced;
-    let exited_processes = (if init_result.exited { 1 } else { 0 })
-        + if hello_result.exited { 1 } else { 0 };
+    let exited_processes =
+        (if init_result.exited { 1 } else { 0 }) + if hello_result.exited { 1 } else { 0 };
     let report = M5Report {
         paging_ownership_active: user_runtime.active_page_table_root != 0,
         active_page_table_root: user_runtime.active_page_table_root,
@@ -641,9 +653,7 @@ extern "efiapi" fn sanju_m5_kernel_entry() -> ! {
         heap_frees: heap.frees(),
         page_fault_diagnostics_active: user_runtime.page_fault_diagnostics_active,
         user_gdt_active: user_runtime.user_gdt_active,
-        ring3_execution_active: init_result.exited
-            && hello_result.exited
-            && fault_result.faulted,
+        ring3_execution_active: init_result.exited && hello_result.exited && fault_result.faulted,
         user_address_space_isolation_active: roots_are_distinct,
         user_stacks_active: true,
         process_control_blocks_active: process_stats.process_count == 3,
@@ -668,7 +678,11 @@ extern "efiapi" fn sanju_m5_kernel_entry() -> ! {
     kernel_main_m5(&mut console, boot_info, report);
 
     if !report.gate_passed() {
-        boot_failure(&mut console, "M5-GATE-001", "protected userspace acceptance gate failed");
+        boot_failure(
+            &mut console,
+            "M5-GATE-001",
+            "protected userspace acceptance gate failed",
+        );
     }
 
     startup::print_stage(&mut console, StartupStage::Shell, true);
