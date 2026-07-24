@@ -210,9 +210,7 @@ fn page_containing(address: u64) -> PhysicalRange {
 #[cfg(test)]
 mod tests {
     use super::{OwnershipError, OwnershipKind, PAGE_SIZE, PhysicalOwnershipMap};
-    use crate::boot_info::{
-        BootInfo, FramebufferInfo, MemoryMapInfo, PhysicalRange, PixelFormat,
-    };
+    use crate::boot_info::{BootInfo, FramebufferInfo, MemoryMapInfo, PhysicalRange, PixelFormat};
 
     fn sample_boot_info() -> BootInfo {
         let memory_map = MemoryMapInfo {

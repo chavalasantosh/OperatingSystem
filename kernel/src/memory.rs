@@ -763,10 +763,9 @@ mod tests {
         let mut allocated = [0_u64; 1];
         let bitmap = FrameBitmap::new(&mut reserved, &mut allocated).unwrap();
         // SAFETY: Test storage remains alive.
-        let mut allocator = unsafe {
-            FrameAllocator::from_memory_map(test_map(&descriptors), bitmap, &ownership)
-        }
-        .unwrap();
+        let mut allocator =
+            unsafe { FrameAllocator::from_memory_map(test_map(&descriptors), bitmap, &ownership) }
+                .unwrap();
         let reserved_frame = super::PhysicalFrame::from_start_address(0x31_0000).unwrap();
         assert_eq!(
             allocator.free_frame(reserved_frame),
@@ -791,10 +790,9 @@ mod tests {
         let mut allocated = [0_u64; 1];
         let bitmap = FrameBitmap::new(&mut reserved, &mut allocated).unwrap();
         // SAFETY: Test storage remains alive.
-        let mut allocator = unsafe {
-            FrameAllocator::from_memory_map(test_map(&descriptors), bitmap, &ownership)
-        }
-        .unwrap();
+        let mut allocator =
+            unsafe { FrameAllocator::from_memory_map(test_map(&descriptors), bitmap, &ownership) }
+                .unwrap();
         assert_eq!(allocator.reserved_frames(), 2);
         assert_eq!(
             allocator.allocate_frame().unwrap().start_address(),
@@ -839,10 +837,8 @@ mod tests {
             )
         }
         .unwrap();
-        let mut pool = PageTableBootstrapPool::<PAGE_TABLE_BOOTSTRAP_FRAMES>::reserve(
-            &mut allocator,
-        )
-        .unwrap();
+        let mut pool =
+            PageTableBootstrapPool::<PAGE_TABLE_BOOTSTRAP_FRAMES>::reserve(&mut allocator).unwrap();
         let frame = pool.allocate().unwrap();
         assert_eq!(allocator.free_frame(frame), Err(MemoryError::ReservedFrame));
         pool.free(frame).unwrap();
