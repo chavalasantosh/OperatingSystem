@@ -427,6 +427,7 @@ mod tests {
         let mut output = Output::default();
         let mut dispatcher = SyscallDispatcher::new(42);
 
+        // SAFETY: The simulated memory and console are valid for the dispatch call.
         let write = unsafe {
             dispatcher.dispatch(
                 SYSCALL_WRITE,
@@ -441,10 +442,12 @@ mod tests {
         assert_eq!(write, SyscallAction::Return(7));
         assert_eq!(output.0, message);
 
+        // SAFETY: The arguments and memory state are valid for the test environment.
         let pid =
             unsafe { dispatcher.dispatch(SYSCALL_GETPID, 0, 0, 0, &memory, &mut fs, &mut output) };
         assert_eq!(pid, SyscallAction::Return(42));
 
+        // SAFETY: Dispatching an open syscall is safe in this test.
         let open = unsafe {
             dispatcher.dispatch(
                 SYSCALL_OPEN,
@@ -462,6 +465,7 @@ mod tests {
         assert!(fd >= 3);
         let fd = usize::try_from(fd).unwrap();
         assert_eq!(dispatcher.descriptor_name(fd), Some("welcome.txt"));
+        // SAFETY: Closing the file descriptor in the test environment is safe.
         let close =
             unsafe { dispatcher.dispatch(SYSCALL_CLOSE, fd, 0, 0, &memory, &mut fs, &mut output) };
         assert_eq!(close, SyscallAction::Return(0));

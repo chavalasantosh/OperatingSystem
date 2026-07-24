@@ -247,6 +247,7 @@ mod tests {
     fn heap_reuses_freed_regions() {
         let mut storage = [0_u8; 4096];
         let mut heap = KernelHeap::new();
+        // SAFETY: The storage array is exclusively owned by this test.
         unsafe { heap.initialize(storage.as_mut_ptr().addr(), storage.len()) }.unwrap();
         let layout = Layout::from_size_align(128, 16).unwrap();
         let first = heap.allocate(layout).unwrap();
