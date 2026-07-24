@@ -625,12 +625,11 @@ pub unsafe fn run_user_process(
     stack_size: usize,
     pid: u32,
 ) -> UserRunResult {
-    let image_end = image_start
-        .checked_add(u64::try_from(image_size).unwrap_or(u64::MAX))
-        .unwrap_or(u64::MAX);
-    let stack_end = stack_start
-        .checked_add(u64::try_from(stack_size).unwrap_or(u64::MAX))
-        .unwrap_or(u64::MAX);
+    let image_end =
+    image_start.saturating_add(u64::try_from(image_size).unwrap_or(u64::MAX));
+
+    let stack_end =
+    stack_start.saturating_add(u64::try_from(stack_size).unwrap_or(u64::MAX));
 
     CURRENT_USER_PID.store(u64::from(pid), Ordering::SeqCst);
     USER_SYSCALLS.store(0, Ordering::SeqCst);
@@ -678,8 +677,15 @@ pub unsafe fn run_user_process(
         asm!("sti", options(nomem, nostack, preserves_flags));
     }
 
-    let faulted = unsafe { SANJU_USER_FAULTED != 0 };
-    let exited = unsafe { SANJU_USER_EXIT_REQUESTED != 0 } && !faulted;
+    // SAFETY: These globals are updated only by the controlled user-mode
+    // exception and syscall paths while this execution result is being collected.
+    let (faulted, exit_requested) = unsafe {
+        (
+            SANJU_USER_FAULTED != 0,
+            SANJU_USER_EXIT_REQUESTED != 0,
+        )
+};
+let exited = exit_requested && !faulted;
     let exit_code = i32::from_ne_bytes(
         u32::try_from(USER_EXIT_CODE.load(Ordering::SeqCst) & u64::from(u32::MAX))
             .unwrap_or(u32::MAX)
