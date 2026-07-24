@@ -31,17 +31,19 @@ const PIT_INPUT_HZ: u32 = 1_193_182;
 pub const TIMER_HZ: u64 = 100;
 const KEYBOARD_DATA: u16 = 0x60;
 const SCANCODE_QUEUE_CAPACITY: usize = 256;
+const CR0_WRITE_PROTECT: u64 = 1_u64 << 16;
+const RFLAGS_INTERRUPT_ENABLE: u64 = 1_u64 << 9;
 
-#[repr(C, align(4096))]
+#[repr(C, align(16))]
 struct Stack([u8; KERNEL_STACK_SIZE]);
 
-#[repr(C, align(4096))]
+#[repr(C, align(16))]
 struct DoubleFaultStack([u8; DOUBLE_FAULT_STACK_SIZE]);
 
-#[repr(C, align(4096))]
+#[repr(C, align(16))]
 struct SyscallStack([u8; SYSCALL_STACK_SIZE]);
 
-#[repr(C, align(4096))]
+#[repr(C, align(16))]
 struct UserInterruptStack([u8; USER_INTERRUPT_STACK_SIZE]);
 
 static mut KERNEL_STACK: Stack = Stack([0; KERNEL_STACK_SIZE]);
@@ -730,22 +732,90 @@ unsafe fn mark_user_range(start: u64, length: usize, executable: bool) -> bool {
     let Some(end) = start.checked_add(length.saturating_sub(1)) else {
         return false;
     };
-    let mut page = start & !0xfff;
-    let last = end & !0xfff;
+    let first_page = start & !0xfff;
+    let last_page = end & !0xfff;
+
+    // OVMF can leave its identity-mapped page-table frames read-only while
+    // CR0.WP is enabled. Updating access bits would then fault in Ring 0.
+    // Disable interrupts and supervisor write protection only for the bounded
+    // page-table update, then restore both architectural states immediately.
+    let original_rflags = read_rflags();
+    let original_cr0 = read_cr0();
+    // SAFETY: This single-core bootstrap section is bounded, interrupts are
+    // disabled first, and CR0 is restored before any user code can execute.
+    unsafe {
+        asm!("cli", options(nomem, nostack));
+        write_cr0(original_cr0 & !CR0_WRITE_PROTECT);
+    }
+
+    // SAFETY: Write protection is temporarily disabled solely so existing
+    // page-table entries reached from CR3 can have access flags updated.
+    let result = unsafe { mark_user_pages(first_page, last_page, executable) };
+
+    // SAFETY: Restore the exact CR0 value observed on entry before optionally
+    // restoring the interrupt-enable state.
+    unsafe {
+        write_cr0(original_cr0);
+        if original_rflags & RFLAGS_INTERRUPT_ENABLE != 0 {
+            asm!("sti", options(nomem, nostack));
+        }
+    }
+    result
+}
+
+unsafe fn mark_user_pages(mut page: u64, last: u64, executable: bool) -> bool {
     loop {
         // SAFETY: The page walker follows present entries from the active CR3.
         if !unsafe { mark_user_page(page, executable) } {
             return false;
         }
         if page == last {
-            break;
+            return true;
         }
         let Some(next) = page.checked_add(4096) else {
             return false;
         };
         page = next;
     }
-    true
+}
+
+fn read_cr0() -> u64 {
+    let value: u64;
+    // SAFETY: Reading CR0 is side-effect free at Ring 0.
+    unsafe {
+        asm!(
+            "mov {value}, cr0",
+            value = out(reg) value,
+            options(nomem, nostack, preserves_flags)
+        );
+    }
+    value
+}
+
+unsafe fn write_cr0(value: u64) {
+    // SAFETY: Callers preserve required control bits and use this only during
+    // the single-core page-table bootstrap transition.
+    unsafe {
+        asm!(
+            "mov cr0, {value}",
+            value = in(reg) value,
+            options(nostack, preserves_flags)
+        );
+    }
+}
+
+fn read_rflags() -> u64 {
+    let value: u64;
+    // SAFETY: PUSHFQ/POP only copies the current flags into a general register.
+    unsafe {
+        asm!(
+            "pushfq",
+            "pop {value}",
+            value = out(reg) value,
+            options(preserves_flags)
+        );
+    }
+    value
 }
 
 #[allow(clippy::cast_ptr_alignment)]
