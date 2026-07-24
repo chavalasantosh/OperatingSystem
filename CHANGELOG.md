@@ -1,5 +1,26 @@
 # Changelog
 
+## Foundation Hardening Phase 1 — 2026-07-24
+
+### Added
+
+- Exact Rust 1.97.0 toolchain and x86-64 UEFI target pinning in local and CI configuration.
+- Canonical capability registry generating Rust data, the capability matrix, and smoke-test expectations.
+- x86-64 architecture boundary for assembly, CPU state, interrupts, syscalls, serial, and QEMU control.
+- Versioned `BootInfoV1` containing retained memory-map, loaded-image, active-CR3, ACPI, SMBIOS, and optional GOP framebuffer metadata.
+- Explicit physical-memory ownership map with overlap rejection.
+- Bitmap frame allocator with allocation, contiguous allocation, release, reservations, exhaustion handling, double-free detection, and reserved-frame protection.
+- Dedicated 256-frame bootstrap pool reserved for future page-table structures.
+- Foundation acceptance report and M5 regression gate.
+
+### Boundary
+
+This phase intentionally keeps the firmware-derived active page tables. It does not activate a fresh PML4, private process CR3 roots, hardware guard holes, or full register-context preemption.
+
+### Rollback
+
+`v0.0.5-m5` remains the immutable rollback point.
+
 ## M5-alpha protected userspace and startup — 2026-07-24
 
 ### Added

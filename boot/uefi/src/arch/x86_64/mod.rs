@@ -1,5 +1,12 @@
 #![allow(clippy::module_name_repetitions, clippy::similar_names)]
 
+mod serial;
+
+#[cfg(feature = "qemu-test")]
+pub mod qemu;
+
+pub use serial::SerialConsole;
+
 use core::arch::{asm, global_asm};
 use core::mem::size_of;
 use core::ptr::{addr_of, addr_of_mut};
@@ -677,8 +684,6 @@ pub unsafe fn run_user_process(
 
     // SAFETY: These globals are updated only by the controlled user-mode
     // exception and syscall paths while this execution result is being collected.
-    // SAFETY: These globals are updated only by the controlled user-mode
-    // exception and syscall paths while this execution result is being collected.
     let (faulted, exit_requested) =
         unsafe { (SANJU_USER_FAULTED != 0, SANJU_USER_EXIT_REQUESTED != 0) };
 
@@ -1345,4 +1350,17 @@ unsafe fn inb(port: u16) -> u8 {
         );
     }
     value
+}
+
+/// Halts the bootstrap processor permanently with interrupts disabled.
+#[allow(dead_code)]
+pub fn halt_forever() -> ! {
+    loop {
+        // SAFETY: This is the terminal state after an unrecoverable kernel
+        // failure. Interrupts are disabled before halting so firmware-owned
+        // handlers cannot run after `ExitBootServices`.
+        unsafe {
+            asm!("cli", "hlt", options(nomem, nostack));
+        }
+    }
 }
