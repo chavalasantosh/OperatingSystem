@@ -30,8 +30,8 @@ use sanju_kernel::shell::{Shell, ShellEnvironment};
 use sanju_kernel::startup::{self, StartupStage};
 use sanju_kernel::{
     BootInfo, Console, FoundationHardeningPhase2Report, FoundationHardeningReport, M5Report,
-    MemoryMapInfo, kernel_main_foundation_hardening,
-    kernel_main_foundation_hardening_phase2, kernel_main_m5,
+    MemoryMapInfo, kernel_main_foundation_hardening, kernel_main_foundation_hardening_phase2,
+    kernel_main_m5,
 };
 
 type EfiHandle = *mut c_void;
@@ -665,9 +665,9 @@ extern "efiapi" fn sanju_m5_kernel_entry() -> ! {
     // SAFETY: Firmware has exited, interrupts remain disabled, the inherited
     // hierarchy and retained boot metadata are readable, and the dedicated
     // page-table pool is exclusively owned by this bootstrap path.
-    let Ok((mut hardware_page_tables, mut hardware_paging_report)) = (unsafe {
-        cpu::take_page_table_ownership(&mut page_table_bootstrap_pool, &boot_info)
-    }) else {
+    let Ok((mut hardware_page_tables, mut hardware_paging_report)) =
+        (unsafe { cpu::take_page_table_ownership(&mut page_table_bootstrap_pool, &boot_info) })
+    else {
         boot_failure(
             &mut console,
             "FH2-MEM-CR3-001",
@@ -679,11 +679,9 @@ extern "efiapi" fn sanju_m5_kernel_entry() -> ! {
     let mapping_probe_flags = PageFlags::WRITABLE
         .union(PageFlags::NO_EXECUTE)
         .union(PageFlags::GLOBAL);
-    let writable_executable_rejected = hardware_page_tables.map_page(
-        mapping_probe_page,
-        mapping_probe_frame,
-        PageFlags::WRITABLE,
-    ) == Err(PagingError::WriteExecuteViolation);
+    let writable_executable_rejected =
+        hardware_page_tables.map_page(mapping_probe_page, mapping_probe_frame, PageFlags::WRITABLE)
+            == Err(PagingError::WriteExecuteViolation);
     let mapping_created = hardware_page_tables
         .map_page(mapping_probe_page, mapping_probe_frame, mapping_probe_flags)
         .is_ok();
@@ -740,8 +738,7 @@ extern "efiapi" fn sanju_m5_kernel_entry() -> ! {
         && hardware_page_tables
             .translate(lower_guard.start_address())
             .is_none()
-        && hardware_page_tables
-            .translate(guard_stack_page.start_address())
+        && hardware_page_tables.translate(guard_stack_page.start_address())
             == Some(guard_stack_frame.start_address())
         && hardware_page_tables
             .translate(upper_guard.start_address())
@@ -1101,8 +1098,7 @@ extern "efiapi" fn sanju_m5_kernel_entry() -> ! {
         mapped_physical_bytes: hardware_paging_report.mapped_physical_bytes,
         page_table_frames_used: hardware_page_table_frames_used,
         fresh_pml4_active: hardware_paging_report.fresh_root_active,
-        inherited_root_retired: hardware_paging_report.old_root
-            != hardware_paging_report.new_root
+        inherited_root_retired: hardware_paging_report.old_root != hardware_paging_report.new_root
             && cpu::active_page_table_root() == hardware_paging_report.new_root,
         physical_direct_map_active: hardware_paging_report.direct_map_active,
         hardware_mapper_active: hardware_paging_report.mapper_active
@@ -1112,8 +1108,7 @@ extern "efiapi" fn sanju_m5_kernel_entry() -> ! {
         protection_test_passed: hardware_paging_report.protection_test_passed,
         write_xor_execute_enforced: hardware_paging_report.write_xor_execute_enforced,
         hardware_guard_pages_active: hardware_paging_report.guard_pages_active,
-        cr3_transition_checkpoint_passed: hardware_paging_report
-            .transition_checkpoint_passed
+        cr3_transition_checkpoint_passed: hardware_paging_report.transition_checkpoint_passed
             && hardware_paging_gate_passed,
         interrupts_after_switch_passed: interrupt_report.timer_interrupts_active
             && interrupt_report.timer_ticks > 0,

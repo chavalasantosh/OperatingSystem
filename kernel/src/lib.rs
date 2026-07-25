@@ -291,7 +291,11 @@ pub fn kernel_main_m5(console: &mut dyn Console, boot_info: BootInfo, report: M5
         "Four-level hardware page-table manager",
         report.four_level_paging_active,
     );
-    write_state(console, "Hardware page map/unmap API", report.mapping_api_active);
+    write_state(
+        console,
+        "Hardware page map/unmap API",
+        report.mapping_api_active,
+    );
     write_state(console, "Page protection flags", report.page_flags_active);
     write_state(
         console,

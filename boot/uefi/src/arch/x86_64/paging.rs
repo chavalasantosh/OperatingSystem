@@ -104,9 +104,7 @@ impl<'a> HardwarePageTable<'a> {
     pub fn new(
         pool: &'a mut PageTableBootstrapPool<PAGE_TABLE_BOOTSTRAP_FRAMES>,
     ) -> Result<Self, PagingError> {
-        let root = pool
-            .allocate()
-            .ok_or(PagingError::BootstrapPoolExhausted)?;
+        let root = pool.allocate().ok_or(PagingError::BootstrapPoolExhausted)?;
         // SAFETY: The bootstrap pool owns the frame exclusively and the
         // inherited identity map keeps it writable before CR3 replacement.
         unsafe {
@@ -142,7 +140,12 @@ impl<'a> HardwarePageTable<'a> {
         frame: PhysicalFrame,
         flags: PageFlags,
     ) -> Result<(), PagingError> {
-        validate_leaf_mapping(page.start_address(), frame.start_address(), flags, PAGE_SIZE)?;
+        validate_leaf_mapping(
+            page.start_address(),
+            frame.start_address(),
+            flags,
+            PAGE_SIZE,
+        )?;
         let entry = self.leaf_entry(page.start_address(), flags.is_user(), true)?;
         // SAFETY: `leaf_entry` returns a valid PTE in an exclusively owned
         // hierarchy and the pointer remains stable for this mutation.
@@ -154,7 +157,10 @@ impl<'a> HardwarePageTable<'a> {
         unsafe {
             entry.write_volatile(
                 frame.start_address()
-                    | flags.union(PageFlags::PRESENT).without(PageFlags::HUGE).bits(),
+                    | flags
+                        .union(PageFlags::PRESENT)
+                        .without(PageFlags::HUGE)
+                        .bits(),
             );
         }
         invalidate_if_active(self.root.start_address(), page.start_address());
@@ -183,9 +189,7 @@ impl<'a> HardwarePageTable<'a> {
         if existing & PageFlags::PRESENT.bits() != 0 {
             return Err(PagingError::AlreadyMapped);
         }
-        let leaf_flags = flags
-            .union(PageFlags::PRESENT)
-            .union(PageFlags::HUGE);
+        let leaf_flags = flags.union(PageFlags::PRESENT).union(PageFlags::HUGE);
         // SAFETY: `entry` is a valid PDE in the owned hierarchy.
         unsafe {
             entry.write_volatile(physical_address | leaf_flags.bits());
@@ -235,13 +239,14 @@ impl<'a> HardwarePageTable<'a> {
                 entry.write_volatile((physical_base + offset) | inherited_flags.bits());
             }
         }
-        let parent_flags = PageFlags::PRESENT
-            .union(PageFlags::WRITABLE)
-            .union(if inherited_flags.is_user() {
-                PageFlags::USER
-            } else {
-                PageFlags::empty()
-            });
+        let parent_flags =
+            PageFlags::PRESENT
+                .union(PageFlags::WRITABLE)
+                .union(if inherited_flags.is_user() {
+                    PageFlags::USER
+                } else {
+                    PageFlags::empty()
+                });
         // SAFETY: Replacing a huge PDE with the populated child table is the
         // architectural split operation. The active root is flushed below.
         unsafe {
@@ -257,11 +262,7 @@ impl<'a> HardwarePageTable<'a> {
     ///
     /// Returns an error for invalid policy, absent mappings, or huge-page
     /// collisions.
-    pub fn protect_page(
-        &mut self,
-        page: VirtualPage,
-        flags: PageFlags,
-    ) -> Result<(), PagingError> {
+    pub fn protect_page(&mut self, page: VirtualPage, flags: PageFlags) -> Result<(), PagingError> {
         flags.validate()?;
         let entry = self.leaf_entry(page.start_address(), flags.is_user(), false)?;
         // SAFETY: The pointer targets a PTE reached through the owned root.
@@ -274,7 +275,11 @@ impl<'a> HardwarePageTable<'a> {
         // replaced under the validated W^X policy.
         unsafe {
             entry.write_volatile(
-                physical | flags.union(PageFlags::PRESENT).without(PageFlags::HUGE).bits(),
+                physical
+                    | flags
+                        .union(PageFlags::PRESENT)
+                        .without(PageFlags::HUGE)
+                        .bits(),
             );
         }
         invalidate_if_active(self.root.start_address(), page.start_address());
@@ -527,9 +532,7 @@ impl HardwarePageTable<'_> {
         if image.is_empty() || !image.start.is_multiple_of(PAGE_SIZE) {
             return Err(PagingError::UnsupportedImage);
         }
-        let end = image
-            .end_exclusive()
-            .ok_or(PagingError::AddressOverflow)?;
+        let end = image.end_exclusive().ok_or(PagingError::AddressOverflow)?;
         let split_start = align_down(image.start, PAGE_SIZE_2M);
         let split_end = align_up(end, PAGE_SIZE_2M)?;
         let mut chunk = split_start;
@@ -611,9 +614,7 @@ impl HardwarePageTable<'_> {
     }
 
     fn verify_image_wx(&self, image: PhysicalRange) -> Result<bool, PagingError> {
-        let end = image
-            .end_exclusive()
-            .ok_or(PagingError::AddressOverflow)?;
+        let end = image.end_exclusive().ok_or(PagingError::AddressOverflow)?;
         let mut saw_executable = false;
         let mut saw_writable = false;
         let mut page = image.start;
@@ -662,8 +663,8 @@ pub unsafe fn reserve_inherited_page_tables(
         return Err(PagingError::UnsupportedCpuFeature);
     }
     let root = read_cr3();
-    let root_frame = PhysicalFrame::from_start_address(root)
-        .ok_or(PagingError::CorruptHierarchy)?;
+    let root_frame =
+        PhysicalFrame::from_start_address(root).ok_or(PagingError::CorruptHierarchy)?;
     let mut frames = [PhysicalFrame::ZERO; MAX_INHERITED_TABLE_FRAMES];
     let mut levels = [0_u8; MAX_INHERITED_TABLE_FRAMES];
     let mut head = 0_usize;
@@ -686,9 +687,7 @@ pub unsafe fn reserve_inherited_page_tables(
         }
         for index in 0..ENTRIES_PER_TABLE {
             let value = table_entry_value(frame, index)?;
-            if value & PageFlags::PRESENT.bits() == 0
-                || value & PageFlags::HUGE.bits() != 0
-            {
+            if value & PageFlags::PRESENT.bits() == 0 || value & PageFlags::HUGE.bits() != 0 {
                 continue;
             }
             let child = child_frame(value)?;
@@ -1030,13 +1029,11 @@ fn parse_image_sections(
         return Err(PagingError::UnsupportedImage);
     }
     // SAFETY: The COFF fields are within `signature_end` checked above.
-    let section_count = usize::from(unsafe {
-        base.add(pe_offset + 6).cast::<u16>().read_unaligned()
-    });
+    let section_count =
+        usize::from(unsafe { base.add(pe_offset + 6).cast::<u16>().read_unaligned() });
     // SAFETY: Same validated COFF header.
-    let optional_header_size = usize::from(unsafe {
-        base.add(pe_offset + 20).cast::<u16>().read_unaligned()
-    });
+    let optional_header_size =
+        usize::from(unsafe { base.add(pe_offset + 20).cast::<u16>().read_unaligned() });
     if section_count == 0 || section_count > MAX_IMAGE_SECTIONS {
         return Err(PagingError::UnsupportedImage);
     }
@@ -1059,21 +1056,15 @@ fn parse_image_sections(
     for (index, slot) in sections.iter_mut().take(section_count).enumerate() {
         let offset = section_table + index * IMAGE_SECTION_HEADER_SIZE;
         // SAFETY: Every section header is within the validated section table.
-        let virtual_size = u64::from(unsafe {
-            base.add(offset + 8).cast::<u32>().read_unaligned()
-        });
+        let virtual_size =
+            u64::from(unsafe { base.add(offset + 8).cast::<u32>().read_unaligned() });
         // SAFETY: Same validated section-header bounds.
-        let virtual_address = u64::from(unsafe {
-            base.add(offset + 12).cast::<u32>().read_unaligned()
-        });
+        let virtual_address =
+            u64::from(unsafe { base.add(offset + 12).cast::<u32>().read_unaligned() });
         // SAFETY: Same validated section-header bounds.
-        let raw_size = u64::from(unsafe {
-            base.add(offset + 16).cast::<u32>().read_unaligned()
-        });
+        let raw_size = u64::from(unsafe { base.add(offset + 16).cast::<u32>().read_unaligned() });
         // SAFETY: Same validated section-header bounds.
-        let characteristics = unsafe {
-            base.add(offset + 36).cast::<u32>().read_unaligned()
-        };
+        let characteristics = unsafe { base.add(offset + 36).cast::<u32>().read_unaligned() };
         *slot = Some(ImageSection {
             virtual_address,
             virtual_size: virtual_size.max(raw_size),
@@ -1111,10 +1102,7 @@ fn table_entry_value(frame: PhysicalFrame, index: usize) -> Result<u64, PagingEr
     Ok(unsafe { pointer.read_volatile() })
 }
 
-fn table_entry_pointer(
-    frame: PhysicalFrame,
-    index: usize,
-) -> Result<*mut u64, PagingError> {
+fn table_entry_pointer(frame: PhysicalFrame, index: usize) -> Result<*mut u64, PagingError> {
     if index >= ENTRIES_PER_TABLE {
         return Err(PagingError::CorruptHierarchy);
     }
@@ -1125,7 +1113,8 @@ fn table_entry_pointer(
 }
 
 unsafe fn zero_table(frame: PhysicalFrame) -> Result<(), PagingError> {
-    let address = usize::try_from(frame.start_address()).map_err(|_| PagingError::AddressOverflow)?;
+    let address =
+        usize::try_from(frame.start_address()).map_err(|_| PagingError::AddressOverflow)?;
     let table = address as *mut u64;
     // SAFETY: The caller exclusively owns a writable 4 KiB page-table frame.
     unsafe {
