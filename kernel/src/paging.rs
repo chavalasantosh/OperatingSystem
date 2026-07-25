@@ -13,8 +13,7 @@ pub const PAGE_SIZE_1G: u64 = 1024 * 1024 * 1024;
 pub const USER_SPACE_START: u64 = 0x0000_0000_0040_0000;
 pub const USER_SPACE_END: u64 = 0x0000_7fff_ffff_f000;
 pub const PHYSICAL_DIRECT_MAP_START: u64 = 0xffff_8000_0000_0000;
-pub const PHYSICAL_DIRECT_MAP_END: u64 =
-    PHYSICAL_DIRECT_MAP_START + MAX_DIRECT_MAP_BYTES - 1;
+pub const PHYSICAL_DIRECT_MAP_END: u64 = PHYSICAL_DIRECT_MAP_START + MAX_DIRECT_MAP_BYTES - 1;
 pub const KERNEL_SPACE_START: u64 = PHYSICAL_DIRECT_MAP_START;
 pub const KERNEL_HEAP_START: u64 = 0xffff_9000_0000_0000;
 pub const KERNEL_STACK_START: u64 = 0xffff_a000_0000_0000;
@@ -422,9 +421,8 @@ pub const fn is_canonical(address: u64) -> bool {
 #[cfg(test)]
 mod tests {
     use super::{
-        GuardedStack, MAX_DIRECT_MAP_BYTES, PHYSICAL_DIRECT_MAP_START, PageFlags,
-        PageTableIndices, PageTableManager, PagingError, VirtualMemoryLayout, VirtualPage,
-        is_canonical,
+        GuardedStack, MAX_DIRECT_MAP_BYTES, PHYSICAL_DIRECT_MAP_START, PageFlags, PageTableIndices,
+        PageTableManager, PagingError, VirtualMemoryLayout, VirtualPage, is_canonical,
     };
     use crate::memory::PhysicalFrame;
 
@@ -468,7 +466,10 @@ mod tests {
         let layout = VirtualMemoryLayout::sanjuos();
         let virtual_address = layout.direct_map_address(0x1234_5000).unwrap();
         assert_eq!(virtual_address, PHYSICAL_DIRECT_MAP_START + 0x1234_5000);
-        assert_eq!(layout.direct_map_physical(virtual_address), Some(0x1234_5000));
+        assert_eq!(
+            layout.direct_map_physical(virtual_address),
+            Some(0x1234_5000)
+        );
         assert_eq!(
             layout.direct_map_physical(PHYSICAL_DIRECT_MAP_START + MAX_DIRECT_MAP_BYTES),
             None

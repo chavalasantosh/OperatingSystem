@@ -298,7 +298,11 @@ pub fn kernel_main_m5(console: &mut dyn Console, boot_info: BootInfo, report: M5
         "Boot-service reclaim inventory",
         report.boot_memory_reclaim_active,
     );
-    write_state(console, "Hardware guard-hole probe", report.guard_pages_active);
+    write_state(
+        console,
+        "Hardware guard-hole probe",
+        report.guard_pages_active,
+    );
     write_state(
         console,
         "W^X memory security",
@@ -834,11 +838,7 @@ mod tests {
                 .output
                 .contains("Inherited firmware page tables: retired\r\n")
         );
-        assert!(
-            console
-                .output
-                .contains("Kernel W^X policy: enforced\r\n")
-        );
+        assert!(console.output.contains("Kernel W^X policy: enforced\r\n"));
     }
 
     #[test]
