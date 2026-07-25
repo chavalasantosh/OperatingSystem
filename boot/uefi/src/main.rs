@@ -10,7 +10,9 @@ use core::ffi::c_void;
 use core::mem::{MaybeUninit, size_of};
 use core::panic::PanicInfo;
 use core::ptr::{addr_of, addr_of_mut};
-use sanju_kernel::boot_info::{FramebufferInfo, OptionalPhysicalAddress, PhysicalRange, PixelFormat};
+use sanju_kernel::boot_info::{
+    FramebufferInfo, OptionalPhysicalAddress, PhysicalRange, PixelFormat,
+};
 use sanju_kernel::elf::load_position_independent;
 use sanju_kernel::fs::RamFs;
 use sanju_kernel::heap::KernelHeap;
@@ -516,7 +518,11 @@ extern "efiapi" fn sanju_m5_kernel_entry() -> ! {
     startup::print_stage(&mut console, StartupStage::Cpu, cpu_report.idt_active);
 
     if !boot_info.is_compatible() {
-        boot_failure(&mut console, "FH-BOOT-001", "BootInfo v1 compatibility check failed");
+        boot_failure(
+            &mut console,
+            "FH-BOOT-001",
+            "BootInfo v1 compatibility check failed",
+        );
     }
 
     let Ok(ownership_map) = PhysicalOwnershipMap::from_boot_info(&boot_info) else {
@@ -560,7 +566,11 @@ extern "efiapi" fn sanju_m5_kernel_entry() -> ! {
         )
     };
     let Ok(frame_bitmap) = FrameBitmap::new(reserved_bitmap, allocated_bitmap) else {
-        boot_failure(&mut console, "FH-MEM-PF-001", "frame bitmap initialization failed");
+        boot_failure(
+            &mut console,
+            "FH-MEM-PF-001",
+            "frame bitmap initialization failed",
+        );
     };
     // SAFETY: The map and static bitmap storage remain valid for the kernel's
     // lifetime, and the ownership map contains every explicit boot reservation.
@@ -575,10 +585,18 @@ extern "efiapi" fn sanju_m5_kernel_entry() -> ! {
     };
 
     let Some(frame_probe_a) = frame_allocator.allocate_frame() else {
-        boot_failure(&mut console, "FH-MEM-PF-003", "frame allocation probe A failed");
+        boot_failure(
+            &mut console,
+            "FH-MEM-PF-003",
+            "frame allocation probe A failed",
+        );
     };
     let Some(frame_probe_b) = frame_allocator.allocate_frame() else {
-        boot_failure(&mut console, "FH-MEM-PF-004", "frame allocation probe B failed");
+        boot_failure(
+            &mut console,
+            "FH-MEM-PF-004",
+            "frame allocation probe B failed",
+        );
     };
     let frame_allocation_unique = frame_probe_a != frame_probe_b;
     let first_free_passed = frame_allocator.free_frame(frame_probe_a).is_ok();
@@ -588,7 +606,11 @@ extern "efiapi" fn sanju_m5_kernel_entry() -> ! {
     if frame_allocator.free_frame(frame_probe_a).is_err()
         || frame_allocator.free_frame(frame_probe_b).is_err()
     {
-        boot_failure(&mut console, "FH-MEM-PF-005", "frame allocation probe cleanup failed");
+        boot_failure(
+            &mut console,
+            "FH-MEM-PF-005",
+            "frame allocation probe cleanup failed",
+        );
     }
 
     let Ok(mut page_table_bootstrap_pool) =
@@ -601,7 +623,11 @@ extern "efiapi" fn sanju_m5_kernel_entry() -> ! {
         );
     };
     let Some(pool_probe_frame) = page_table_bootstrap_pool.allocate() else {
-        boot_failure(&mut console, "FH-MEM-PTB-002", "bootstrap pool allocation failed");
+        boot_failure(
+            &mut console,
+            "FH-MEM-PTB-002",
+            "bootstrap pool allocation failed",
+        );
     };
     let reserved_frame_detection_passed =
         frame_allocator.free_frame(pool_probe_frame) == Err(MemoryError::ReservedFrame);
@@ -935,8 +961,8 @@ extern "efiapi" fn sanju_m5_kernel_entry() -> ! {
 
     let foundation_report = FoundationHardeningReport {
         toolchain_pinned: true,
-        capability_registry_synchronized:
-            sanju_kernel::generated::capabilities::REGISTRY_VERSION == 1,
+        capability_registry_synchronized: sanju_kernel::generated::capabilities::REGISTRY_VERSION
+            == 1,
         architecture_separation_verified: true,
         boot_info_version: boot_info.version,
         ownership_map_active: !ownership_map.is_empty(),
@@ -946,8 +972,7 @@ extern "efiapi" fn sanju_m5_kernel_entry() -> ! {
         frame_reuse_passed: first_free_passed && frame_reuse_passed,
         double_free_detection_passed,
         reserved_frame_detection_passed,
-        bootstrap_pool_active:
-            page_table_bootstrap_pool.capacity() == PAGE_TABLE_BOOTSTRAP_FRAMES,
+        bootstrap_pool_active: page_table_bootstrap_pool.capacity() == PAGE_TABLE_BOOTSTRAP_FRAMES,
         bootstrap_pool_capacity: page_table_bootstrap_pool.capacity(),
         bootstrap_pool_remaining: page_table_bootstrap_pool.remaining(),
         m5_regression_passed: report.gate_passed(),
@@ -1076,7 +1101,11 @@ fn configuration_table_addresses(
         }
     }
 
-    let acpi = if acpi_20.is_present() { acpi_20 } else { acpi_10 };
+    let acpi = if acpi_20.is_present() {
+        acpi_20
+    } else {
+        acpi_10
+    };
     let smbios = if smbios_3.is_present() {
         smbios_3
     } else {

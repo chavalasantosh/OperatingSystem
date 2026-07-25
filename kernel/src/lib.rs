@@ -4,12 +4,12 @@
 pub mod boot_info;
 pub mod capabilities;
 pub mod elf;
-pub mod generated;
-pub mod ownership;
 pub mod fs;
+pub mod generated;
 pub mod heap;
 pub mod input;
 pub mod memory;
+pub mod ownership;
 pub mod paging;
 pub mod process;
 pub mod scheduler;
@@ -278,7 +278,11 @@ pub fn kernel_main_m5(console: &mut dyn Console, boot_info: BootInfo, report: M5
     console.write_line(boot_info.architecture());
     console.write_str("Firmware: ");
     console.write_line(boot_info.firmware());
-    write_state(console, "Inherited page-table root captured", report.paging_ownership_active);
+    write_state(
+        console,
+        "Inherited page-table root captured",
+        report.paging_ownership_active,
+    );
     console.write_str("Active page-table root: 0x");
     write_hex_u64(console, report.active_page_table_root);
     console.write_line("");
@@ -438,7 +442,11 @@ pub fn kernel_main_foundation_hardening(
     console.write_str("BootInfo version: ");
     console.write_u64(u64::from(report.boot_info_version));
     console.write_line("");
-    write_state(console, "Physical ownership map", report.ownership_map_active);
+    write_state(
+        console,
+        "Physical ownership map",
+        report.ownership_map_active,
+    );
     console.write_str("Physical ownership ranges: ");
     console.write_usize(report.ownership_ranges);
     console.write_line("");
@@ -447,11 +455,13 @@ pub fn kernel_main_foundation_hardening(
     } else {
         "Reserved-range overlap test: failed"
     });
-    console.write_line(if report.frame_allocation_unique && report.frame_reuse_passed {
-        "Frame allocation/free test: passed"
-    } else {
-        "Frame allocation/free test: failed"
-    });
+    console.write_line(
+        if report.frame_allocation_unique && report.frame_reuse_passed {
+            "Frame allocation/free test: passed"
+        } else {
+            "Frame allocation/free test: failed"
+        },
+    );
     console.write_line(if report.double_free_detection_passed {
         "Double-free detection: passed"
     } else {
@@ -618,8 +628,16 @@ mod tests {
         };
         kernel_main_foundation_hardening(&mut console, report);
         assert!(report.gate_passed());
-        assert!(console.output.contains("Foundation hardening phase 1: passed\r\n"));
-        assert!(console.output.contains("Frame allocation/free test: passed\r\n"));
+        assert!(
+            console
+                .output
+                .contains("Foundation hardening phase 1: passed\r\n")
+        );
+        assert!(
+            console
+                .output
+                .contains("Frame allocation/free test: passed\r\n")
+        );
     }
 
     #[test]
@@ -634,7 +652,11 @@ mod tests {
         .unwrap();
         kernel_main_m5(&mut console, info, sample_m5_report());
         assert!(console.output.contains("SanjuOS M5\r\n"));
-        assert!(console.output.contains("Inherited page-table root captured: active\r\n"));
+        assert!(
+            console
+                .output
+                .contains("Inherited page-table root captured: active\r\n")
+        );
         assert!(console.output.contains("Ring 3 execution: active\r\n"));
         assert!(console.output.contains("System-call interface: active\r\n"));
         assert!(console.output.contains("ELF64 loader: active\r\n"));

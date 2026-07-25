@@ -170,8 +170,7 @@ impl<'a> FrameAllocator<'a> {
             // SAFETY: The caller guarantees the retained map and the structural
             // validation above bounds every descriptor access.
             let descriptor = unsafe { read_descriptor(map, descriptor_index)? };
-            if descriptor.memory_type != EFI_CONVENTIONAL_MEMORY
-                || descriptor.number_of_pages == 0
+            if descriptor.memory_type != EFI_CONVENTIONAL_MEMORY || descriptor.number_of_pages == 0
             {
                 continue;
             }
@@ -352,9 +351,7 @@ impl<'a> FrameAllocator<'a> {
         if range.is_empty() {
             return Ok(());
         }
-        let end = range
-            .end_exclusive()
-            .ok_or(MemoryError::AddressOverflow)?;
+        let end = range.end_exclusive().ok_or(MemoryError::AddressOverflow)?;
         let aligned_start = range.start - (range.start % PAGE_SIZE);
         let aligned_end = align_up_u64(end, PAGE_SIZE).ok_or(MemoryError::AddressOverflow)?;
         let mut address = aligned_start;
