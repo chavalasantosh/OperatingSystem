@@ -280,7 +280,7 @@ pub fn kernel_main_m5(console: &mut dyn Console, boot_info: BootInfo, report: M5
     console.write_line(boot_info.firmware());
     write_state(
         console,
-        "Inherited page-table root captured",
+        "SanjuOS page-table ownership",
         report.paging_ownership_active,
     );
     console.write_str("Active page-table root: 0x");
@@ -288,17 +288,17 @@ pub fn kernel_main_m5(console: &mut dyn Console, boot_info: BootInfo, report: M5
     console.write_line("");
     write_state(
         console,
-        "Page-table mapping acceptance model",
+        "Four-level hardware page-table manager",
         report.four_level_paging_active,
     );
-    write_state(console, "Page map/unmap API", report.mapping_api_active);
+    write_state(console, "Hardware page map/unmap API", report.mapping_api_active);
     write_state(console, "Page protection flags", report.page_flags_active);
     write_state(
         console,
         "Boot-service reclaim inventory",
         report.boot_memory_reclaim_active,
     );
-    write_state(console, "Guarded-stack layout", report.guard_pages_active);
+    write_state(console, "Hardware guard-hole probe", report.guard_pages_active);
     write_state(
         console,
         "W^X memory security",
@@ -488,9 +488,165 @@ pub fn kernel_main_foundation_hardening(
     capabilities::print_registry(console);
     if report.gate_passed() {
         console.write_line("Foundation hardening phase 1: passed");
-        console.write_line("Next gate: fresh SanjuOS PML4 and hardware page-table ownership");
+        console.write_line("FH1 regression baseline: preserved");
     } else {
         console.write_line("Foundation hardening phase 1: failed");
+    }
+}
+
+/// Runtime evidence for Foundation Hardening Phase 2.
+#[allow(clippy::struct_excessive_bools)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct FoundationHardeningPhase2Report {
+    pub virtual_memory_layout_frozen: bool,
+    pub image_sections_verified: bool,
+    pub old_page_table_root: u64,
+    pub new_page_table_root: u64,
+    pub inherited_table_frames_reserved: usize,
+    pub mapped_physical_bytes: u64,
+    pub page_table_frames_used: usize,
+    pub fresh_pml4_active: bool,
+    pub inherited_root_retired: bool,
+    pub physical_direct_map_active: bool,
+    pub hardware_mapper_active: bool,
+    pub map_unmap_test_passed: bool,
+    pub translation_test_passed: bool,
+    pub protection_test_passed: bool,
+    pub write_xor_execute_enforced: bool,
+    pub hardware_guard_pages_active: bool,
+    pub cr3_transition_checkpoint_passed: bool,
+    pub interrupts_after_switch_passed: bool,
+    pub m5_regression_passed: bool,
+    pub fh1_regression_passed: bool,
+}
+
+impl FoundationHardeningPhase2Report {
+    #[must_use]
+    pub const fn gate_passed(self) -> bool {
+        self.virtual_memory_layout_frozen
+            && self.image_sections_verified
+            && self.old_page_table_root != 0
+            && self.new_page_table_root != 0
+            && self.old_page_table_root != self.new_page_table_root
+            && self.inherited_table_frames_reserved > 0
+            && self.mapped_physical_bytes > 0
+            && self.page_table_frames_used > 0
+            && self.fresh_pml4_active
+            && self.inherited_root_retired
+            && self.physical_direct_map_active
+            && self.hardware_mapper_active
+            && self.map_unmap_test_passed
+            && self.translation_test_passed
+            && self.protection_test_passed
+            && self.write_xor_execute_enforced
+            && self.hardware_guard_pages_active
+            && self.cr3_transition_checkpoint_passed
+            && self.interrupts_after_switch_passed
+            && self.m5_regression_passed
+            && self.fh1_regression_passed
+    }
+}
+
+/// Prints the Foundation Hardening Phase 2 acceptance report.
+pub fn kernel_main_foundation_hardening_phase2(
+    console: &mut dyn Console,
+    report: FoundationHardeningPhase2Report,
+) {
+    console.write_line("");
+    console.write_line("SanjuOS Foundation Hardening Phase 2");
+    console.write_line(if report.virtual_memory_layout_frozen {
+        "Virtual-memory layout: frozen"
+    } else {
+        "Virtual-memory layout: invalid"
+    });
+    console.write_line(if report.image_sections_verified {
+        "Kernel PE section boundaries: verified"
+    } else {
+        "Kernel PE section boundaries: failed"
+    });
+    console.write_str("Inherited page-table root: 0x");
+    write_hex_u64(console, report.old_page_table_root);
+    console.write_line("");
+    console.write_str("SanjuOS page-table root: 0x");
+    write_hex_u64(console, report.new_page_table_root);
+    console.write_line("");
+    console.write_str("Inherited page-table frames reserved: ");
+    console.write_usize(report.inherited_table_frames_reserved);
+    console.write_line("");
+    console.write_str("Physical window mapped bytes: ");
+    console.write_u64(report.mapped_physical_bytes);
+    console.write_line("");
+    console.write_str("SanjuOS page-table frames used: ");
+    console.write_usize(report.page_table_frames_used);
+    console.write_line("");
+    write_state(console, "Fresh SanjuOS PML4", report.fresh_pml4_active);
+    console.write_line(if report.inherited_root_retired {
+        "Inherited firmware page tables: retired"
+    } else {
+        "Inherited firmware page tables: still active"
+    });
+    write_state(
+        console,
+        "Physical direct map",
+        report.physical_direct_map_active,
+    );
+    write_state(
+        console,
+        "Four-level hardware mapper",
+        report.hardware_mapper_active,
+    );
+    console.write_line(if report.map_unmap_test_passed {
+        "Page map/unmap test: passed"
+    } else {
+        "Page map/unmap test: failed"
+    });
+    console.write_line(if report.translation_test_passed {
+        "Page translation test: passed"
+    } else {
+        "Page translation test: failed"
+    });
+    console.write_line(if report.protection_test_passed {
+        "Page protection test: passed"
+    } else {
+        "Page protection test: failed"
+    });
+    console.write_line(if report.write_xor_execute_enforced {
+        "Kernel W^X policy: enforced"
+    } else {
+        "Kernel W^X policy: failed"
+    });
+    write_state(
+        console,
+        "Hardware guard-hole probe",
+        report.hardware_guard_pages_active,
+    );
+    console.write_line(if report.cr3_transition_checkpoint_passed {
+        "CR3 transition checkpoint: passed"
+    } else {
+        "CR3 transition checkpoint: failed"
+    });
+    console.write_line(if report.interrupts_after_switch_passed {
+        "Interrupts after CR3 switch: passed"
+    } else {
+        "Interrupts after CR3 switch: failed"
+    });
+    console.write_line(if report.m5_regression_passed {
+        "M5 userspace regression: passed"
+    } else {
+        "M5 userspace regression: failed"
+    });
+    console.write_line(if report.fh1_regression_passed {
+        "FH1 allocator regression: passed"
+    } else {
+        "FH1 allocator regression: failed"
+    });
+    if report.gate_passed() {
+        console.write_line("Foundation hardening phase 2: passed");
+        console.write_line(
+            "Next gate: private process CR3 roots and real register-context scheduling",
+        );
+    } else {
+        console.write_line("Foundation hardening phase 2: failed");
     }
 }
 
@@ -517,8 +673,9 @@ fn write_state(console: &mut dyn Console, label: &str, active: bool) {
 #[cfg(test)]
 mod tests {
     use super::{
-        BootInfo, Console, FoundationHardeningReport, M4Report, M5Report, MemoryMapInfo,
-        kernel_main, kernel_main_foundation_hardening, kernel_main_m5,
+        BootInfo, Console, FoundationHardeningPhase2Report, FoundationHardeningReport, M4Report,
+        M5Report, MemoryMapInfo, kernel_main, kernel_main_foundation_hardening,
+        kernel_main_foundation_hardening_phase2, kernel_main_m5,
     };
     use std::string::String;
 
@@ -641,6 +798,50 @@ mod tests {
     }
 
     #[test]
+    fn foundation_hardening_phase2_banner_requires_hardware_evidence() {
+        let mut console = RecordingConsole::default();
+        let report = FoundationHardeningPhase2Report {
+            virtual_memory_layout_frozen: true,
+            image_sections_verified: true,
+            old_page_table_root: 0x1000,
+            new_page_table_root: 0x2000,
+            inherited_table_frames_reserved: 8,
+            mapped_physical_bytes: 256 * 1024 * 1024,
+            page_table_frames_used: 12,
+            fresh_pml4_active: true,
+            inherited_root_retired: true,
+            physical_direct_map_active: true,
+            hardware_mapper_active: true,
+            map_unmap_test_passed: true,
+            translation_test_passed: true,
+            protection_test_passed: true,
+            write_xor_execute_enforced: true,
+            hardware_guard_pages_active: true,
+            cr3_transition_checkpoint_passed: true,
+            interrupts_after_switch_passed: true,
+            m5_regression_passed: true,
+            fh1_regression_passed: true,
+        };
+        kernel_main_foundation_hardening_phase2(&mut console, report);
+        assert!(report.gate_passed());
+        assert!(
+            console
+                .output
+                .contains("Foundation hardening phase 2: passed\r\n")
+        );
+        assert!(
+            console
+                .output
+                .contains("Inherited firmware page tables: retired\r\n")
+        );
+        assert!(
+            console
+                .output
+                .contains("Kernel W^X policy: enforced\r\n")
+        );
+    }
+
+    #[test]
     fn m5_banner_confirms_protected_userspace_gate() {
         let mut console = RecordingConsole::default();
         let info = BootInfo::new(
@@ -655,7 +856,7 @@ mod tests {
         assert!(
             console
                 .output
-                .contains("Inherited page-table root captured: active\r\n")
+                .contains("SanjuOS page-table ownership: active\r\n")
         );
         assert!(console.output.contains("Ring 3 execution: active\r\n"));
         assert!(console.output.contains("System-call interface: active\r\n"));

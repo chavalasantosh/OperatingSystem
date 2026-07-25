@@ -1,4 +1,4 @@
-registry_version = 1
+registry_version = 2
 
 [[capability]]
 id = "SYS-TC-001"
@@ -67,17 +67,46 @@ required_boot_line = "Page-table bootstrap pool: active"
 id = "MEM-VM-001"
 name = "Hardware four-level page-table manager"
 status = "acceptance_prototype"
-milestone = "m5"
-evidence = ["kernel/src/paging.rs", "boot/uefi/src/arch/x86_64/mod.rs"]
-boot_label = "Four-level page-table manager"
+milestone = "foundation-hardening-2"
+evidence = ["kernel/src/paging.rs", "boot/uefi/src/arch/x86_64/paging.rs"]
+boot_label = "Four-level hardware mapper"
+required_boot_line = "Four-level hardware mapper: active"
+
+[[capability]]
+id = "MEM-CR3-001"
+name = "Fresh SanjuOS-owned PML4 and CR3 transition"
+status = "hardware_active"
+milestone = "foundation-hardening-2"
+evidence = ["boot/uefi/src/arch/x86_64/paging.rs", "scripts/smoke-test.sh"]
+boot_label = "Fresh SanjuOS PML4"
+required_boot_line = "Fresh SanjuOS PML4: active"
+
+[[capability]]
+id = "MEM-DMAP-001"
+name = "Higher-half physical direct map"
+status = "acceptance_prototype"
+milestone = "foundation-hardening-2"
+evidence = ["kernel/src/paging.rs", "boot/uefi/src/arch/x86_64/paging.rs"]
+boot_label = "Physical direct map"
+required_boot_line = "Physical direct map: active"
+
+[[capability]]
+id = "MEM-WX-001"
+name = "Page-granular kernel W^X enforcement"
+status = "verified"
+milestone = "foundation-hardening-2"
+evidence = ["boot/uefi/src/arch/x86_64/paging.rs", "scripts/smoke-test.sh"]
+boot_label = "Kernel W^X policy"
+required_boot_line = "Kernel W^X policy: enforced"
 
 [[capability]]
 id = "MEM-GUARD-001"
-name = "Hardware-unmapped guard pages"
-status = "software_model"
-milestone = "m5"
-evidence = ["kernel/src/paging.rs"]
-boot_label = "Guarded-stack layout"
+name = "Hardware-unmapped guard-hole probe"
+status = "acceptance_prototype"
+milestone = "foundation-hardening-2"
+evidence = ["kernel/src/paging.rs", "boot/uefi/src/arch/x86_64/paging.rs"]
+boot_label = "Hardware guard-hole probe"
+required_boot_line = "Hardware guard-hole probe: active"
 
 [[capability]]
 id = "MEM-RECLAIM-001"

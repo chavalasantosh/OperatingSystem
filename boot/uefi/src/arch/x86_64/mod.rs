@@ -1,10 +1,15 @@
 #![allow(clippy::module_name_repetitions, clippy::similar_names)]
 
+pub(crate) mod paging;
 mod serial;
 
 #[cfg(feature = "qemu-test")]
 pub mod qemu;
 
+pub(crate) use paging::{
+    active_page_table_root, kernel_guard_base, kernel_heap_probe_page, mark_user_range,
+    reserve_inherited_page_tables, take_page_table_ownership,
+};
 pub use serial::SerialConsole;
 
 use core::arch::{asm, global_asm};
@@ -38,8 +43,6 @@ const PIT_INPUT_HZ: u32 = 1_193_182;
 pub const TIMER_HZ: u64 = 100;
 const KEYBOARD_DATA: u16 = 0x60;
 const SCANCODE_QUEUE_CAPACITY: usize = 256;
-const CR0_WRITE_PROTECT: u64 = 1_u64 << 16;
-const RFLAGS_INTERRUPT_ENABLE: u64 = 1_u64 << 9;
 
 #[repr(C, align(16))]
 struct Stack([u8; KERNEL_STACK_SIZE]);
@@ -604,17 +607,6 @@ pub unsafe fn initialize_user_mode_runtime() -> UserModeRuntimeReport {
     }
 }
 
-/// Reads the physical root of the active x86-64 page-table hierarchy.
-#[must_use]
-pub fn active_page_table_root() -> u64 {
-    let value: u64;
-    // SAFETY: Reading CR3 is side-effect free at Ring 0.
-    unsafe {
-        asm!("mov {value}, cr3", value = out(reg) value, options(nomem, nostack, preserves_flags));
-    }
-    value & 0x000f_ffff_ffff_f000
-}
-
 /// Runs one loaded ELF entry point at Ring 3 and returns after exit or a
 /// recoverable user exception.
 ///
@@ -728,158 +720,6 @@ unsafe fn configure_syscall_msrs() {
         write_msr(IA32_LSTAR, handler_address(sanju_syscall_entry_stub));
         write_msr(IA32_FMASK, (1 << 8) | (1 << 9) | (1 << 10));
     }
-}
-
-unsafe fn mark_user_range(start: u64, length: usize, executable: bool) -> bool {
-    if length == 0 {
-        return false;
-    }
-    let Ok(length) = u64::try_from(length) else {
-        return false;
-    };
-    let Some(end) = start.checked_add(length.saturating_sub(1)) else {
-        return false;
-    };
-    let first_page = start & !0xfff;
-    let last_page = end & !0xfff;
-
-    // OVMF can leave its identity-mapped page-table frames read-only while
-    // CR0.WP is enabled. Updating access bits would then fault in Ring 0.
-    // Disable interrupts and supervisor write protection only for the bounded
-    // page-table update, then restore both architectural states immediately.
-    let original_rflags = read_rflags();
-    let original_cr0 = read_cr0();
-    // SAFETY: This single-core bootstrap section is bounded, interrupts are
-    // disabled first, and CR0 is restored before any user code can execute.
-    unsafe {
-        asm!("cli", options(nomem, nostack));
-        write_cr0(original_cr0 & !CR0_WRITE_PROTECT);
-    }
-
-    // SAFETY: Write protection is temporarily disabled solely so existing
-    // page-table entries reached from CR3 can have access flags updated.
-    let result = unsafe { mark_user_pages(first_page, last_page, executable) };
-
-    // SAFETY: Restore the exact CR0 value observed on entry before optionally
-    // restoring the interrupt-enable state.
-    unsafe {
-        write_cr0(original_cr0);
-        if original_rflags & RFLAGS_INTERRUPT_ENABLE != 0 {
-            asm!("sti", options(nomem, nostack));
-        }
-    }
-    result
-}
-
-unsafe fn mark_user_pages(mut page: u64, last: u64, executable: bool) -> bool {
-    loop {
-        // SAFETY: The page walker follows present entries from the active CR3.
-        if !unsafe { mark_user_page(page, executable) } {
-            return false;
-        }
-        if page == last {
-            return true;
-        }
-        let Some(next) = page.checked_add(4096) else {
-            return false;
-        };
-        page = next;
-    }
-}
-
-fn read_cr0() -> u64 {
-    let value: u64;
-    // SAFETY: Reading CR0 is side-effect free at Ring 0.
-    unsafe {
-        asm!(
-            "mov {value}, cr0",
-            value = out(reg) value,
-            options(nomem, nostack, preserves_flags)
-        );
-    }
-    value
-}
-
-unsafe fn write_cr0(value: u64) {
-    // SAFETY: Callers preserve required control bits and use this only during
-    // the single-core page-table bootstrap transition.
-    unsafe {
-        asm!(
-            "mov cr0, {value}",
-            value = in(reg) value,
-            options(nostack, preserves_flags)
-        );
-    }
-}
-
-fn read_rflags() -> u64 {
-    let value: u64;
-    // SAFETY: PUSHFQ/POP only copies the current flags into a general register.
-    unsafe {
-        asm!(
-            "pushfq",
-            "pop {value}",
-            value = out(reg) value,
-            options(preserves_flags)
-        );
-    }
-    value
-}
-
-#[allow(clippy::cast_ptr_alignment)]
-unsafe fn mark_user_page(address: u64, executable: bool) -> bool {
-    const PRESENT: u64 = 1 << 0;
-    const USER: u64 = 1 << 2;
-    const HUGE: u64 = 1 << 7;
-    const NX: u64 = 1 << 63;
-    const ADDRESS_MASK: u64 = 0x000f_ffff_ffff_f000;
-
-    let indices = [
-        usize::try_from((address >> 39) & 0x1ff).unwrap_or(0),
-        usize::try_from((address >> 30) & 0x1ff).unwrap_or(0),
-        usize::try_from((address >> 21) & 0x1ff).unwrap_or(0),
-        usize::try_from((address >> 12) & 0x1ff).unwrap_or(0),
-    ];
-    let mut table_address = active_page_table_root();
-    if table_address == 0 {
-        return false;
-    }
-
-    for (level, index) in indices.into_iter().enumerate() {
-        let Ok(table_usize) = usize::try_from(table_address) else {
-            return false;
-        };
-        let table = table_usize as *mut u64;
-        // SAFETY: `table` is a present page-table frame reached from CR3 and
-        // `index` is limited to the architectural 0..512 range.
-        let entry_pointer = unsafe { table.add(index) };
-        // SAFETY: The active page table is mapped by the boot environment.
-        let mut entry = unsafe { entry_pointer.read_volatile() };
-        if entry & PRESENT == 0 {
-            return false;
-        }
-        entry |= USER;
-        if executable && (level == 3 || (level >= 1 && entry & HUGE != 0)) {
-            entry &= !NX;
-        }
-        // SAFETY: This updates only access flags on an existing mapping.
-        unsafe {
-            entry_pointer.write_volatile(entry);
-        }
-        if level == 3 || (level >= 1 && entry & HUGE != 0) {
-            // SAFETY: Invalidate the modified translation for this address.
-            unsafe {
-                asm!(
-                    "invlpg [{address}]",
-                    address = in(reg) address,
-                    options(nostack, preserves_flags)
-                );
-            }
-            return true;
-        }
-        table_address = entry & ADDRESS_MASK;
-    }
-    false
 }
 
 unsafe fn read_msr(msr: u32) -> u64 {

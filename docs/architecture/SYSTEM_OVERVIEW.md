@@ -81,7 +81,13 @@ UEFI system table and loaded-image protocol
     -> unchanged M5 execution regression
 ```
 
-Phase 1 deliberately does not reload `CR3`. The next memory phase builds a fresh
-SanjuOS PML4, maps every live kernel and platform range explicitly, validates the
-new hierarchy, and only then retires firmware-derived mappings. Full process
-preemption and private address spaces remain blocked on that gate.
+Phase 2 constructs a fresh PML4 from the dedicated bootstrap pool, reserves the
+complete inherited hierarchy, maps a bounded identity transition window plus a
+higher-half physical direct map, applies PE-section W^X permissions, and reloads
+`CR3` only after validation. Hardware map/translate/protect/unmap probes and real
+unmapped kernel guard holes run before interrupts and M5 user space are restored.
+
+The kernel remains a combined EFI-stub image during this epoch, so the identity
+transition window is intentional rather than an accidental firmware dependency.
+Private process roots, per-task Ring 0 stacks, and full interrupt-context
+preemption remain blocked on the next hardening gate.

@@ -23,16 +23,15 @@ use sanju_kernel::memory::{
     PAGE_TABLE_BOOTSTRAP_FRAMES, PageTableBootstrapPool,
 };
 use sanju_kernel::ownership::{OwnershipError, OwnershipKind, PhysicalOwnershipMap};
-use sanju_kernel::paging::{
-    GuardedStack, KERNEL_HEAP_START, PageFlags, PageTableManager, VirtualPage,
-};
+use sanju_kernel::paging::{GuardedStack, PageFlags, PagingError, VirtualPage};
 use sanju_kernel::process::{AddressSpace, ProcessTable};
 use sanju_kernel::scheduler::{Scheduler, TaskKind};
 use sanju_kernel::shell::{Shell, ShellEnvironment};
 use sanju_kernel::startup::{self, StartupStage};
 use sanju_kernel::{
-    BootInfo, Console, FoundationHardeningReport, M5Report, MemoryMapInfo,
-    kernel_main_foundation_hardening, kernel_main_m5,
+    BootInfo, Console, FoundationHardeningPhase2Report, FoundationHardeningReport, M5Report,
+    MemoryMapInfo, kernel_main_foundation_hardening,
+    kernel_main_foundation_hardening_phase2, kernel_main_m5,
 };
 
 type EfiHandle = *mut c_void;
@@ -481,6 +480,7 @@ extern "efiapi" fn efi_main(
         return EFI_INVALID_PARAMETER;
     };
     boot_info.kernel_image = kernel_image;
+    boot_info.boot_image = kernel_image;
     boot_info.acpi_rsdp = acpi_rsdp;
     boot_info.smbios_entry = smbios_entry;
     boot_info.framebuffer = framebuffer;
@@ -583,6 +583,17 @@ extern "efiapi" fn sanju_m5_kernel_entry() -> ! {
             "bitmap frame allocator initialization failed",
         );
     };
+    // SAFETY: The inherited hierarchy is still active and identity-accessible,
+    // interrupts remain disabled, and no allocator client has received a frame.
+    let Ok(inherited_table_frames_reserved) =
+        (unsafe { cpu::reserve_inherited_page_tables(&mut frame_allocator) })
+    else {
+        boot_failure(
+            &mut console,
+            "FH2-MEM-PT-001",
+            "inherited page-table reservation failed",
+        );
+    };
 
     let Some(frame_probe_a) = frame_allocator.allocate_frame() else {
         boot_failure(
@@ -634,6 +645,121 @@ extern "efiapi" fn sanju_m5_kernel_entry() -> ! {
     if page_table_bootstrap_pool.free(pool_probe_frame).is_err() {
         boot_failure(&mut console, "FH-MEM-PTB-003", "bootstrap pool free failed");
     }
+    let bootstrap_pool_remaining_before_takeover = page_table_bootstrap_pool.remaining();
+
+    let Some(mapping_probe_frame) = frame_allocator.allocate_frame() else {
+        boot_failure(
+            &mut console,
+            "FH2-MEM-VM-001",
+            "hardware mapper probe frame allocation failed",
+        );
+    };
+    let Some(guard_stack_frame) = frame_allocator.allocate_frame() else {
+        boot_failure(
+            &mut console,
+            "FH2-MEM-GUARD-001",
+            "hardware guard-stack frame allocation failed",
+        );
+    };
+
+    // SAFETY: Firmware has exited, interrupts remain disabled, the inherited
+    // hierarchy and retained boot metadata are readable, and the dedicated
+    // page-table pool is exclusively owned by this bootstrap path.
+    let Ok((mut hardware_page_tables, mut hardware_paging_report)) = (unsafe {
+        cpu::take_page_table_ownership(&mut page_table_bootstrap_pool, &boot_info)
+    }) else {
+        boot_failure(
+            &mut console,
+            "FH2-MEM-CR3-001",
+            "SanjuOS page-table ownership transition failed",
+        );
+    };
+
+    let mapping_probe_page = cpu::kernel_heap_probe_page();
+    let mapping_probe_flags = PageFlags::WRITABLE
+        .union(PageFlags::NO_EXECUTE)
+        .union(PageFlags::GLOBAL);
+    let writable_executable_rejected = hardware_page_tables.map_page(
+        mapping_probe_page,
+        mapping_probe_frame,
+        PageFlags::WRITABLE,
+    ) == Err(PagingError::WriteExecuteViolation);
+    let mapping_created = hardware_page_tables
+        .map_page(mapping_probe_page, mapping_probe_frame, mapping_probe_flags)
+        .is_ok();
+    let Ok(mapping_probe_address) = usize::try_from(mapping_probe_page.start_address()) else {
+        boot_failure(
+            &mut console,
+            "FH2-MEM-VM-002",
+            "hardware mapper probe address is not representable",
+        );
+    };
+    let mapping_probe_pointer = mapping_probe_address as *mut u64;
+    let mapping_probe_value = 0x5341_4e4a_554f_5332_u64;
+    let mapping_read_write_passed = if mapping_created {
+        // SAFETY: The fresh hardware mapper installed this page as present,
+        // writable, and NX before the volatile probe access.
+        unsafe {
+            mapping_probe_pointer.write_volatile(mapping_probe_value);
+            mapping_probe_pointer.read_volatile() == mapping_probe_value
+        }
+    } else {
+        false
+    };
+    let mapping_translation_passed = hardware_page_tables
+        .translate(mapping_probe_page.start_address())
+        == Some(mapping_probe_frame.start_address());
+    let read_only_nx = PageFlags::NO_EXECUTE.union(PageFlags::GLOBAL);
+    let mapping_protection_passed = hardware_page_tables
+        .protect_page(mapping_probe_page, read_only_nx)
+        .is_ok()
+        && hardware_page_tables
+            .flags_for(mapping_probe_page.start_address())
+            .is_some_and(|flags| !flags.is_writable() && !flags.is_executable());
+    let mapping_removed = hardware_page_tables.unmap_page(mapping_probe_page)
+        == Ok(mapping_probe_frame)
+        && hardware_page_tables
+            .translate(mapping_probe_page.start_address())
+            .is_none();
+    if frame_allocator.free_frame(mapping_probe_frame).is_err() {
+        boot_failure(
+            &mut console,
+            "FH2-MEM-VM-003",
+            "hardware mapper probe frame cleanup failed",
+        );
+    }
+
+    let guard_base = cpu::kernel_guard_base();
+    let lower_guard = VirtualPage::containing(guard_base);
+    let guard_stack_page = VirtualPage::containing(guard_base + PAGE_SIZE);
+    let upper_guard = VirtualPage::containing(guard_base + 2 * PAGE_SIZE);
+    let guard_mapping_created = hardware_page_tables
+        .map_page(guard_stack_page, guard_stack_frame, mapping_probe_flags)
+        .is_ok();
+    let hardware_guard_pages_active = guard_mapping_created
+        && hardware_page_tables
+            .translate(lower_guard.start_address())
+            .is_none()
+        && hardware_page_tables
+            .translate(guard_stack_page.start_address())
+            == Some(guard_stack_frame.start_address())
+        && hardware_page_tables
+            .translate(upper_guard.start_address())
+            .is_none();
+
+    hardware_paging_report.map_unmap_test_passed =
+        mapping_created && mapping_read_write_passed && mapping_removed;
+    hardware_paging_report.translation_test_passed &= mapping_translation_passed;
+    hardware_paging_report.protection_test_passed = mapping_protection_passed;
+    hardware_paging_report.write_xor_execute_enforced &= writable_executable_rejected;
+    hardware_paging_report.guard_pages_active = hardware_guard_pages_active;
+    let hardware_page_table_frames_used = hardware_page_tables.allocated_tables();
+    let page_table_pool_remaining_after_takeover = hardware_page_tables.pool_remaining();
+    let page_table_pool_accounting_passed = page_table_pool_remaining_after_takeover
+        .saturating_add(hardware_page_table_frames_used)
+        == PAGE_TABLE_BOOTSTRAP_FRAMES;
+    let hardware_paging_gate_passed =
+        hardware_paging_report.gate_passed() && page_table_pool_accounting_passed;
 
     let usable_frames =
         usize::try_from(frame_allocator.total_usable_frames()).unwrap_or(usize::MAX);
@@ -656,32 +782,10 @@ extern "efiapi" fn sanju_m5_kernel_entry() -> ! {
         user_runtime.four_level_paging_active,
     );
 
-    let Some(mapping_frame) = frame_allocator.allocate_frame() else {
-        boot_failure(
-            &mut console,
-            "M5-MEM-002",
-            "no frame for page-table API probe",
-        );
-    };
-    let mut page_tables = PageTableManager::new(user_runtime.active_page_table_root);
-    let mapping_page = VirtualPage::containing(KERNEL_HEAP_START);
-    let safe_flags = PageFlags::WRITABLE
-        .union(PageFlags::NO_EXECUTE)
-        .union(PageFlags::GLOBAL);
-    let mapping_created = page_tables
-        .map(mapping_page, mapping_frame, safe_flags)
-        .is_ok();
-    let page_flags_active = page_tables
-        .flags_for(mapping_page)
-        .is_some_and(|flags| flags.is_writable() && !flags.is_executable());
-    let mapping_removed = page_tables.unmap(mapping_page) == Ok(mapping_frame);
-    let wx_violation_rejected = page_tables
-        .map(
-            VirtualPage::containing(KERNEL_HEAP_START + PAGE_SIZE),
-            mapping_frame,
-            PageFlags::WRITABLE,
-        )
-        .is_err();
+    let mapping_created = hardware_paging_report.map_unmap_test_passed;
+    let page_flags_active = hardware_paging_report.protection_test_passed;
+    let mapping_removed = hardware_paging_report.map_unmap_test_passed;
+    let wx_violation_rejected = hardware_paging_report.write_xor_execute_enforced;
 
     let mut heap = KernelHeap::new();
     // SAFETY: Taking the address of the static heap storage is safe.
@@ -912,13 +1016,15 @@ extern "efiapi" fn sanju_m5_kernel_entry() -> ! {
     let exited_processes =
         (if init_result.exited { 1 } else { 0 }) + if hello_result.exited { 1 } else { 0 };
     let report = M5Report {
-        paging_ownership_active: user_runtime.active_page_table_root != 0,
+        paging_ownership_active: hardware_paging_gate_passed
+            && user_runtime.active_page_table_root == hardware_paging_report.new_root,
         active_page_table_root: user_runtime.active_page_table_root,
-        four_level_paging_active: user_runtime.four_level_paging_active,
+        four_level_paging_active: hardware_paging_report.mapper_active,
         mapping_api_active: mapping_created && mapping_removed,
         page_flags_active,
         boot_memory_reclaim_active: reclaimable_frames > 0,
-        guard_pages_active: init_stack.stack_pages > 0
+        guard_pages_active: hardware_paging_report.guard_pages_active
+            && init_stack.stack_pages > 0
             && hello_stack.stack_pages > 0
             && fault_stack.stack_pages > 0,
         write_xor_execute_active: wx_violation_rejected && elf_security,
@@ -962,7 +1068,7 @@ extern "efiapi" fn sanju_m5_kernel_entry() -> ! {
     let foundation_report = FoundationHardeningReport {
         toolchain_pinned: true,
         capability_registry_synchronized: sanju_kernel::generated::capabilities::REGISTRY_VERSION
-            == 1,
+            == 2,
         architecture_separation_verified: true,
         boot_info_version: boot_info.version,
         ownership_map_active: !ownership_map.is_empty(),
@@ -974,7 +1080,7 @@ extern "efiapi" fn sanju_m5_kernel_entry() -> ! {
         reserved_frame_detection_passed,
         bootstrap_pool_active: page_table_bootstrap_pool.capacity() == PAGE_TABLE_BOOTSTRAP_FRAMES,
         bootstrap_pool_capacity: page_table_bootstrap_pool.capacity(),
-        bootstrap_pool_remaining: page_table_bootstrap_pool.remaining(),
+        bootstrap_pool_remaining: bootstrap_pool_remaining_before_takeover,
         m5_regression_passed: report.gate_passed(),
     };
     kernel_main_foundation_hardening(&mut console, foundation_report);
@@ -983,6 +1089,43 @@ extern "efiapi" fn sanju_m5_kernel_entry() -> ! {
             &mut console,
             "FH-GATE-001",
             "foundation hardening phase 1 acceptance gate failed",
+        );
+    }
+
+    let phase2_report = FoundationHardeningPhase2Report {
+        virtual_memory_layout_frozen: hardware_paging_report.layout_frozen,
+        image_sections_verified: hardware_paging_report.image_sections_verified,
+        old_page_table_root: hardware_paging_report.old_root,
+        new_page_table_root: hardware_paging_report.new_root,
+        inherited_table_frames_reserved,
+        mapped_physical_bytes: hardware_paging_report.mapped_physical_bytes,
+        page_table_frames_used: hardware_page_table_frames_used,
+        fresh_pml4_active: hardware_paging_report.fresh_root_active,
+        inherited_root_retired: hardware_paging_report.old_root
+            != hardware_paging_report.new_root
+            && cpu::active_page_table_root() == hardware_paging_report.new_root,
+        physical_direct_map_active: hardware_paging_report.direct_map_active,
+        hardware_mapper_active: hardware_paging_report.mapper_active
+            && page_table_pool_accounting_passed,
+        map_unmap_test_passed: hardware_paging_report.map_unmap_test_passed,
+        translation_test_passed: hardware_paging_report.translation_test_passed,
+        protection_test_passed: hardware_paging_report.protection_test_passed,
+        write_xor_execute_enforced: hardware_paging_report.write_xor_execute_enforced,
+        hardware_guard_pages_active: hardware_paging_report.guard_pages_active,
+        cr3_transition_checkpoint_passed: hardware_paging_report
+            .transition_checkpoint_passed
+            && hardware_paging_gate_passed,
+        interrupts_after_switch_passed: interrupt_report.timer_interrupts_active
+            && interrupt_report.timer_ticks > 0,
+        m5_regression_passed: report.gate_passed(),
+        fh1_regression_passed: foundation_report.gate_passed(),
+    };
+    kernel_main_foundation_hardening_phase2(&mut console, phase2_report);
+    if !phase2_report.gate_passed() {
+        boot_failure(
+            &mut console,
+            "FH2-GATE-001",
+            "foundation hardening phase 2 acceptance gate failed",
         );
     }
 

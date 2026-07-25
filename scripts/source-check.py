@@ -13,6 +13,7 @@ import sys
 ROOT = Path(__file__).resolve().parents[1]
 BOOT = ROOT / "boot/uefi/src/main.rs"
 CPU = ROOT / "boot/uefi/src/arch/x86_64/mod.rs"
+HARDWARE_PAGING = ROOT / "boot/uefi/src/arch/x86_64/paging.rs"
 KERNEL = ROOT / "kernel/src/lib.rs"
 BOOT_INFO = ROOT / "kernel/src/boot_info.rs"
 OWNERSHIP = ROOT / "kernel/src/ownership.rs"
@@ -303,6 +304,7 @@ def validate_elf64(path: Path) -> None:
 def main() -> int:
     boot = BOOT.read_text(encoding="utf-8")
     cpu = CPU.read_text(encoding="utf-8")
+    hardware_paging = HARDWARE_PAGING.read_text(encoding="utf-8")
     kernel = KERNEL.read_text(encoding="utf-8")
     boot_info = BOOT_INFO.read_text(encoding="utf-8")
     ownership = OWNERSHIP.read_text(encoding="utf-8")
@@ -331,6 +333,7 @@ def main() -> int:
     require(boot, "FrameAllocator::from_memory_map", BOOT)
     require(boot, "PhysicalOwnershipMap::from_boot_info", BOOT)
     require(boot, "PageTableBootstrapPool", BOOT)
+    require(boot, "PagingError::WriteExecuteViolation", BOOT)
     require(boot, "EFI_GRAPHICS_OUTPUT_PROTOCOL_GUID", BOOT)
     require(boot, "fn framebuffer_info", BOOT)
     require(boot, "KernelHeap::new", BOOT)
@@ -353,6 +356,19 @@ def main() -> int:
     require(cpu, "sysretq", CPU)
     require(cpu, "iretq", CPU)
     require(cpu, "mark_user_range", CPU)
+    require(hardware_paging, "pub struct HardwarePageTable", HARDWARE_PAGING)
+    require(hardware_paging, "take_page_table_ownership", HARDWARE_PAGING)
+    require(hardware_paging, "reserve_inherited_page_tables", HARDWARE_PAGING)
+    require(hardware_paging, "map_huge_2m", HARDWARE_PAGING)
+    require(hardware_paging, "split_huge_2m", HARDWARE_PAGING)
+    require(hardware_paging, "protect_page", HARDWARE_PAGING)
+    require(hardware_paging, "write_cr3", HARDWARE_PAGING)
+    require(hardware_paging, "PHYSICAL_DIRECT_MAP_START", HARDWARE_PAGING)
+    require(hardware_paging, "IMAGE_SCN_MEM_EXECUTE", HARDWARE_PAGING)
+    require(hardware_paging, "enable_execute_disable", HARDWARE_PAGING)
+    require(hardware_paging, "enable_kernel_write_protect", HARDWARE_PAGING)
+    require(hardware_paging, "switch_cr3_and_flush_global", HARDWARE_PAGING)
+    require(hardware_paging, "update_direct_alias_permissions", HARDWARE_PAGING)
     require(memory, "pub struct FrameAllocator", MEMORY)
     require(memory, "pub struct FrameBitmap", MEMORY)
     require(memory, "pub fn free_frame", MEMORY)
@@ -449,9 +465,24 @@ def main() -> int:
         cwd=ROOT,
         check=True,
     )
+    if (ROOT / ".git").exists():
+        tracked_output = subprocess.run(
+            ["git", "ls-files", "*.patch", "*.zip"],
+            cwd=ROOT,
+            check=True,
+            capture_output=True,
+            text=True,
+        ).stdout.splitlines()
+        tracked_artifacts = [
+            relative for relative in tracked_output if (ROOT / relative).exists()
+        ]
+        if tracked_artifacts:
+            raise AssertionError(
+                f"delivery artifacts must not be tracked: {tracked_artifacts}"
+            )
     validate_source_manifest()
 
-    print("SanjuOS Foundation Hardening Phase 1 source checks passed.")
+    print("SanjuOS Foundation Hardening Phase 2 source checks passed.")
     print("UEFI memory descriptor base size: 40 bytes")
     print("UEFI GOP mode-information size: 36 bytes")
     print("UEFI GOP mode size: 40 bytes")

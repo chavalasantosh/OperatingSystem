@@ -6,3 +6,8 @@ BootInfo version: 1
 Physical ownership map: active
 Frame allocation/free test: passed
 Page-table bootstrap pool: active
+Four-level hardware mapper: active
+Fresh SanjuOS PML4: active
+Physical direct map: active
+Kernel W^X policy: enforced
+Hardware guard-hole probe: active

@@ -1,5 +1,25 @@
 # Changelog
 
+## Foundation Hardening Phase 2 candidate — 2026-07-25
+
+### Added
+
+- Frozen x86-64 virtual-memory layout and higher-half physical direct map.
+- Complete inherited page-table hierarchy discovery and frame reservation.
+- Fresh SanjuOS-owned PML4 built from the dedicated bootstrap pool.
+- Hardware 4 KiB/2 MiB map, split, translate, protect, and unmap operations.
+- Safe CR3 transition with NX, supervisor write protection, and global-TLB flush.
+- PE/COFF section parsing with page-granular kernel W^X permissions.
+- Cross-alias W^X hardening for Ring 3 images and kernel direct mappings.
+- Real unmapped kernel guard holes and post-transition hardware probes.
+- FH2 capability evidence, ADR, sprint plan, validation plan, and regressions.
+
+### Boundary
+
+The kernel now owns its active page-table root. Private process CR3 roots,
+per-process Ring 0 stacks, and full timer-driven register-context switching remain
+FH3 work and are not claimed by this phase.
+
 ## Foundation Hardening Phase 1 — 2026-07-24
 
 ### Added

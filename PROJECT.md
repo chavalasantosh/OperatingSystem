@@ -6,8 +6,8 @@
 - Architecture: x86-64
 - Firmware: UEFI 2.x
 - Primary language: Rust 2024
-- Current checkpoint: Foundation Hardening Phase 1 after `v0.0.5-m5`
-- Accepted releases: M1, M2, M3, M4, and tagged M5 (`v0.0.5-m5`)
+- Current checkpoint: Foundation Hardening Phase 2 candidate after `v0.0.6-fh1`
+- Accepted releases: M1–M5, tagged M5 (`v0.0.5-m5`), and FH1 (`v0.0.6-fh1`)
 - Deployment policy: QEMU only until physical-install safety gates pass
 
 ## Mission
@@ -20,8 +20,8 @@ Development is grouped into major milestone batches. Small formatting or CI corr
 
 ## Current objective
 
-Freeze the build, capability, architecture, boot-handoff, physical-ownership, frame-allocation, and page-table-bootstrap contracts while preserving the complete M5 regression boot.
+Construct and activate a SanjuOS-owned x86-64 page-table hierarchy with explicit W^X permissions, a physical direct map, real hardware map/unmap operations, and unmapped kernel guard holes while preserving M5 and FH1 regressions.
 
 ## Next major objective
 
-Construct and activate a fresh SanjuOS PML4 with a hardware-backed mapper and real guard holes. Private process CR3 roots and complete saved-register context switching follow before PCI/storage, VFS, persistent filesystems, or compositor work.
+Build private process CR3 roots, one kernel stack per process, complete interrupt-frame context switching, timer preemption, and resource reclamation before PCI/storage, VFS, persistent filesystems, or compositor work.

@@ -1,6 +1,6 @@
 # SanjuOS Capability Matrix
 
-Registry version: **1**
+Registry version: **2**
 
 This file is generated from `capabilities/capabilities.toml`. Do not edit it manually.
 
@@ -13,8 +13,11 @@ This file is generated from `capabilities/capabilities.toml`. Do not edit it man
 | `MEM-OWN-001` | Physical memory ownership map | `hardware_active` | `foundation-hardening-1` | `kernel/src/ownership.rs`<br>`kernel/src/memory.rs` |
 | `MEM-PF-001` | Bitmap physical frame allocator with alloc and free | `hardware_active` | `foundation-hardening-1` | `kernel/src/memory.rs` |
 | `MEM-PTB-001` | Dedicated page-table bootstrap pool | `hardware_active` | `foundation-hardening-1` | `kernel/src/memory.rs` |
-| `MEM-VM-001` | Hardware four-level page-table manager | `acceptance_prototype` | `m5` | `kernel/src/paging.rs`<br>`boot/uefi/src/arch/x86_64/mod.rs` |
-| `MEM-GUARD-001` | Hardware-unmapped guard pages | `software_model` | `m5` | `kernel/src/paging.rs` |
+| `MEM-VM-001` | Hardware four-level page-table manager | `acceptance_prototype` | `foundation-hardening-2` | `kernel/src/paging.rs`<br>`boot/uefi/src/arch/x86_64/paging.rs` |
+| `MEM-CR3-001` | Fresh SanjuOS-owned PML4 and CR3 transition | `hardware_active` | `foundation-hardening-2` | `boot/uefi/src/arch/x86_64/paging.rs`<br>`scripts/smoke-test.sh` |
+| `MEM-DMAP-001` | Higher-half physical direct map | `acceptance_prototype` | `foundation-hardening-2` | `kernel/src/paging.rs`<br>`boot/uefi/src/arch/x86_64/paging.rs` |
+| `MEM-WX-001` | Page-granular kernel W^X enforcement | `verified` | `foundation-hardening-2` | `boot/uefi/src/arch/x86_64/paging.rs`<br>`scripts/smoke-test.sh` |
+| `MEM-GUARD-001` | Hardware-unmapped guard-hole probe | `acceptance_prototype` | `foundation-hardening-2` | `kernel/src/paging.rs`<br>`boot/uefi/src/arch/x86_64/paging.rs` |
 | `MEM-RECLAIM-001` | Boot-service memory reclaim | `software_model` | `m5` | `kernel/src/memory.rs` |
 | `PROC-R3-001` | Ring 3 privilege transition | `hardware_active` | `m5` | `boot/uefi/src/arch/x86_64/mod.rs`<br>`user/programs/src/` |
 | `PROC-AS-001` | Private process CR3 isolation | `software_model` | `m5` | `kernel/src/process.rs` |

@@ -9,3 +9,7 @@
 
 __pycache__/
 *.pyc
+
+# Local delivery artifacts
+*.patch
+*.zip

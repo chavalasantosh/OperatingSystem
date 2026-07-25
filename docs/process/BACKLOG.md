@@ -19,13 +19,27 @@
 - ELF64 PIE loader and three embedded user programs.
 - Branded startup, error codes, SanjuOS ASCII output, and graphical logo asset.
 
-## M6 — Hardware-Owned Process Runtime
+## Foundation Hardening Phase 1 — accepted (`v0.0.6-fh1`)
 
-- Kernel relocation/high-half policy.
-- Private activated CR3 roots and page-table cloning.
-- Real unmapped guard pages.
-- Per-process kernel stacks and complete register context switching.
-- Timer-driven process preemption and blocking/wakeup.
+- Pinned toolchain and generated capability truth registry.
+- Versioned BootInfoV1 and architecture-boundary refactor.
+- Physical ownership map, bitmap allocator with free, and page-table pool.
+
+## Foundation Hardening Phase 2 — major candidate
+
+- Frozen x86-64 virtual-memory layout.
+- Complete inherited page-table reservation.
+- Fresh SanjuOS-owned PML4 and safe CR3 transition.
+- Physical direct map and hardware map/translate/protect/unmap API.
+- PE-section W^X permissions and real kernel guard holes.
+- M5 and FH1 regression preservation.
+
+## Foundation Hardening Phase 3 — Hardware-Owned Process Runtime
+
+- Kernel relocation/high-half policy and private activated process CR3 roots.
+- One hardware-unmapped user and Ring 0 stack pair per process.
+- Complete interrupt-frame register context switching.
+- Timer-driven process preemption, blocking/wakeup, and resource reclamation.
 - User VFS handles and executable spawning.
 
 ## Later major epics

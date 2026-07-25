@@ -55,7 +55,7 @@ grep -Fq "Milestone M5: protected user-space foundation and branded startup." bu
 grep -Fq "init: SanjuOS protected userspace online" build/qemu-debug.log
 grep -Fq "hello: running from SanjuOS Ring 3" build/qemu-debug.log
 grep -Fq "SanjuOS: isolated user exception" build/qemu-debug.log
-grep -Fq "Inherited page-table root captured: active" build/qemu-debug.log
+grep -Fq "SanjuOS page-table ownership: active" build/qemu-debug.log
 grep -Fq "Kernel heap: active" build/qemu-debug.log
 grep -Fq "Ring 3 execution: active" build/qemu-debug.log
 grep -Fq "User address-space model: active" build/qemu-debug.log
@@ -74,6 +74,13 @@ grep -Fq "Double-free detection: passed" build/qemu-debug.log
 grep -Fq "Reserved-frame protection: passed" build/qemu-debug.log
 grep -Fq "M5 regression boot: passed" build/qemu-debug.log
 grep -Fq "Foundation hardening phase 1: passed" build/qemu-debug.log
+grep -Fq "Inherited firmware page tables: retired" build/qemu-debug.log
+grep -Fq "Page map/unmap test: passed" build/qemu-debug.log
+grep -Fq "Page translation test: passed" build/qemu-debug.log
+grep -Fq "Page protection test: passed" build/qemu-debug.log
+grep -Fq "CR3 transition checkpoint: passed" build/qemu-debug.log
+grep -Fq "Interrupts after CR3 switch: passed" build/qemu-debug.log
+grep -Fq "Foundation hardening phase 2: passed" build/qemu-debug.log
 grep -Fq "SanjuOS kernel shell ready." build/qemu-debug.log
 grep -Fq "M5 protected userspace, syscalls, and ELF loader are active." build/qemu-debug.log
 
