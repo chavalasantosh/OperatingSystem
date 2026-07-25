@@ -821,7 +821,7 @@ mod tests {
     fn bootstrap_pool_does_not_use_heap() {
         let pages = u64::try_from(PAGE_TABLE_BOOTSTRAP_FRAMES + 8).unwrap();
         let descriptors = [conventional_descriptor(0x50_0000, pages)];
-        let words = (PAGE_TABLE_BOOTSTRAP_FRAMES + 63) / 64 + 1;
+        let words = PAGE_TABLE_BOOTSTRAP_FRAMES.div_ceil(64) + 1;
         let mut reserved = vec![0_u64; words];
         let mut allocated = vec![0_u64; words];
         let bitmap = FrameBitmap::new(&mut reserved, &mut allocated).unwrap();
