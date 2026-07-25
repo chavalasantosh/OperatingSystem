@@ -1125,14 +1125,11 @@ unsafe fn zero_table(frame: PhysicalFrame) -> Result<(), PagingError> {
 }
 
 fn enable_execute_disable() -> bool {
-    // SAFETY: CPUID is available in x86-64 mode and does not alter privileged
-    // execution state.
-    let maximum = unsafe { core::arch::x86_64::__cpuid(CPUID_EXTENDED_MAXIMUM) }.eax;
+    let maximum = core::arch::x86_64::__cpuid(CPUID_EXTENDED_MAXIMUM).eax;
     if maximum < CPUID_EXTENDED_FEATURES {
         return false;
     }
-    // SAFETY: Same CPUID contract as above.
-    let features = unsafe { core::arch::x86_64::__cpuid(CPUID_EXTENDED_FEATURES) };
+    let features = core::arch::x86_64::__cpuid(CPUID_EXTENDED_FEATURES);
     if features.edx & CPUID_NX_BIT == 0 {
         return false;
     }
