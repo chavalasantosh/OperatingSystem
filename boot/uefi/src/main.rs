@@ -1258,10 +1258,10 @@ fn exit_firmware(
     for _ in 0..EXIT_BOOT_SERVICES_RETRIES {
         let snapshot = capture_memory_map(get_memory_map)?;
 
+        let map_key = usize::try_from(snapshot.info.map_key).map_err(|_| EFI_INVALID_PARAMETER)?;
         // SAFETY: `image_handle` is the firmware-provided image handle and the
         // map key comes from the immediately preceding successful memory-map
         // call. No allocation or other map-mutating service occurs between.
-        let map_key = usize::try_from(snapshot.info.map_key).map_err(|_| EFI_INVALID_PARAMETER)?;
         let status = unsafe { exit_boot_services(image_handle, map_key) };
         if status == EFI_SUCCESS {
             return Ok(snapshot);
