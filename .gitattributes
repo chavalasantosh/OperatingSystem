@@ -1,5 +1,3 @@
 * text=auto eol=lf
 *.png binary
 *.elf binary
-*.patch binary
-*.zip binary
