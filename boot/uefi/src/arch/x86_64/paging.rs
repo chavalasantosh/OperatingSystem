@@ -1106,7 +1106,8 @@ fn table_entry_pointer(frame: PhysicalFrame, index: usize) -> Result<*mut u64, P
     if index >= ENTRIES_PER_TABLE {
         return Err(PagingError::CorruptHierarchy);
     }
-    let address = usize::try_from(frame.start_address()).map_err(|_| PagingError::AddressOverflow)?;
+    let address =
+        usize::try_from(frame.start_address()).map_err(|_| PagingError::AddressOverflow)?;
     let table = address as *mut u64;
     // SAFETY: `index` is checked against the 512-entry page-table size.
     Ok(unsafe { table.add(index) })
