@@ -1,6 +1,7 @@
 #![allow(clippy::module_name_repetitions, clippy::similar_names)]
 
 pub(crate) mod paging;
+mod pci;
 mod serial;
 
 #[cfg(feature = "qemu-test")]
@@ -11,6 +12,7 @@ pub(crate) use paging::{
     mark_user_range, reserve_inherited_page_tables, switch_address_space,
     take_page_table_ownership,
 };
+pub(crate) use pci::discover_pci;
 pub use serial::SerialConsole;
 
 use core::arch::{asm, global_asm};

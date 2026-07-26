@@ -11,6 +11,7 @@ pub mod input;
 pub mod memory;
 pub mod ownership;
 pub mod paging;
+pub mod pci;
 pub mod process;
 pub mod scheduler;
 pub mod shell;
@@ -788,6 +789,81 @@ pub fn kernel_main_foundation_hardening_phase3(
     }
 }
 
+/// Runtime evidence for the M6A PCI and storage-discovery gate.
+#[allow(clippy::struct_excessive_bools)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct M6aReport {
+    pub configuration_mechanism_one_active: bool,
+    pub inventory_complete: bool,
+    pub buses_scanned: usize,
+    pub pci_functions_discovered: usize,
+    pub storage_controllers_discovered: usize,
+    pub virtio_block_targets_discovered: usize,
+    pub fh3_regression_passed: bool,
+}
+
+impl M6aReport {
+    #[must_use]
+    pub const fn gate_passed(self) -> bool {
+        self.configuration_mechanism_one_active
+            && self.inventory_complete
+            && self.buses_scanned > 0
+            && self.pci_functions_discovered > 0
+            && self.storage_controllers_discovered > 0
+            && self.virtio_block_targets_discovered > 0
+            && self.fh3_regression_passed
+    }
+}
+
+/// Prints the M6A hardware-discovery acceptance report.
+pub fn kernel_main_m6a(console: &mut dyn Console, report: M6aReport) {
+    console.write_line("");
+    console.write_line("SanjuOS M6A PCI and Storage Discovery");
+    write_state(
+        console,
+        "PCI configuration mechanism #1",
+        report.configuration_mechanism_one_active,
+    );
+    write_state(
+        console,
+        "PCI inventory completeness",
+        report.inventory_complete,
+    );
+    console.write_str("PCI buses scanned: ");
+    console.write_usize(report.buses_scanned);
+    console.write_line("");
+    console.write_str("PCI functions discovered: ");
+    console.write_usize(report.pci_functions_discovered);
+    console.write_line("");
+    console.write_str("Mass-storage controllers discovered: ");
+    console.write_usize(report.storage_controllers_discovered);
+    console.write_line("");
+    console.write_str("Virtio block targets discovered: ");
+    console.write_usize(report.virtio_block_targets_discovered);
+    console.write_line("");
+    write_state(
+        console,
+        "Virtio block PCI target",
+        report.virtio_block_targets_discovered > 0,
+    );
+    console.write_line(if report.virtio_block_targets_discovered > 0 {
+        "Storage driver target: virtio-blk-pci"
+    } else {
+        "Storage driver target: unavailable"
+    });
+    console.write_line(if report.fh3_regression_passed {
+        "FH3 regression under M6A: passed"
+    } else {
+        "FH3 regression under M6A: failed"
+    });
+    if report.gate_passed() {
+        console.write_line("M6A PCI discovery gate: passed");
+        console.write_line("Next gate: virtio-blk sector read/write through the block API");
+    } else {
+        console.write_line("M6A PCI discovery gate: failed");
+    }
+}
+
 fn write_hex_u64(console: &mut dyn Console, value: u64) {
     for shift in (0..16).rev() {
         let nibble = u8::try_from((value >> (shift * 4)) & 0x0f).unwrap_or(0);
@@ -812,9 +888,9 @@ fn write_state(console: &mut dyn Console, label: &str, active: bool) {
 mod tests {
     use super::{
         BootInfo, Console, FoundationHardeningPhase2Report, FoundationHardeningPhase3Report,
-        FoundationHardeningReport, M4Report, M5Report, MemoryMapInfo, kernel_main,
+        FoundationHardeningReport, M4Report, M5Report, M6aReport, MemoryMapInfo, kernel_main,
         kernel_main_foundation_hardening, kernel_main_foundation_hardening_phase2,
-        kernel_main_foundation_hardening_phase3, kernel_main_m5,
+        kernel_main_foundation_hardening_phase3, kernel_main_m5, kernel_main_m6a,
     };
     use std::string::String;
 
@@ -1014,6 +1090,44 @@ mod tests {
             console
                 .output
                 .contains("Process page-table reclamation: passed\r\n")
+        );
+    }
+
+    #[test]
+    fn m6a_banner_requires_a_real_virtio_block_target() {
+        let mut console = RecordingConsole::default();
+        let report = M6aReport {
+            configuration_mechanism_one_active: true,
+            inventory_complete: true,
+            buses_scanned: 1,
+            pci_functions_discovered: 7,
+            storage_controllers_discovered: 2,
+            virtio_block_targets_discovered: 1,
+            fh3_regression_passed: true,
+        };
+        kernel_main_m6a(&mut console, report);
+        assert!(report.gate_passed());
+        assert!(
+            !M6aReport {
+                virtio_block_targets_discovered: 0,
+                ..report
+            }
+            .gate_passed()
+        );
+        assert!(
+            console
+                .output
+                .contains("PCI configuration mechanism #1: active\r\n")
+        );
+        assert!(
+            console
+                .output
+                .contains("Storage driver target: virtio-blk-pci\r\n")
+        );
+        assert!(
+            console
+                .output
+                .contains("M6A PCI discovery gate: passed\r\n")
         );
     }
 

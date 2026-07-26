@@ -16,3 +16,5 @@ Complete interrupt-frame switching: active
 Per-process Ring 0 stacks: active
 User and Ring 0 guard holes: active
 Process page-table reclamation: passed
+PCI configuration mechanism #1: active
+Virtio block PCI target: active

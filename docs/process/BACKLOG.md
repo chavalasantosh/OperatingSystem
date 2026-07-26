@@ -34,7 +34,7 @@
 - PE-section W^X permissions and real kernel guard holes.
 - M5 and FH1 regression preservation.
 
-## Foundation Hardening Phase 3 — implementation complete
+## Foundation Hardening Phase 3 — accepted (`v0.0.8-fh3`)
 
 - Private activated process CR3 roots.
 - Hardware-unmapped lower and upper guards for user and Ring 0 stacks.
@@ -42,14 +42,20 @@
 - Timer-driven process preemption and CR3/TSS switching.
 - Blocking, wakeup, and deterministic page-table resource reclamation.
 
-## Next — PCI, Storage, and VFS Foundation
+## M6A — PCI and Storage Discovery — in development
 
 - PCI enumeration and driver matching.
-- Block-device abstraction and virtio-blk/AHCI evaluation.
+- Bounded multifunction and bridge-aware inventory.
+- QEMU virtio-blk target discovery.
+- Shell PCI diagnostics.
+
+## M6B through M6D — Storage and VFS Foundation
+
+- Block-device abstraction and polling virtio-blk transport.
 - Buffer cache and asynchronous I/O contracts.
 - VFS inode, mount, path, and file-handle model.
-- Read-only persistent filesystem prototype.
-- User VFS handles and executable spawning.
+- Read-only FAT32 persistent filesystem prototype.
+- User VFS handles and executable spawning after the kernel VFS gate.
 
 ## Later major epics
 

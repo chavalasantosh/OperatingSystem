@@ -1,8 +1,14 @@
 # Environment Verification Note
 
-The project was advanced to M1-alpha in a workspace without Rust, QEMU, or OVMF. Network restrictions also prevented package installation. Dependency-free source checks validate critical source markers and x86-64 UEFI ABI layout assumptions, but they do not replace compilation or an emulator boot.
+GitHub Actions is the authoritative clean Ubuntu validation environment. It
+installs the pinned Rust toolchain, QEMU, and OVMF, then runs the complete
+quality and smoke workflows from a fresh checkout.
 
-The first mandatory action on a configured development machine is:
+Dependency-free source checks validate critical source markers and x86-64 UEFI
+ABI layout assumptions in constrained workspaces, but they do not replace the
+compiler or emulator gates.
+
+The mandatory validation sequence on a configured development machine is:
 
 ```bash
 make setup
@@ -13,4 +19,6 @@ make test
 make smoke
 ```
 
-Any compiler, linker, firmware, or emulator issue becomes a release-blocking defect. Neither M0 nor M1 is accepted until the QEMU smoke gate passes from a clean checkout.
+Any compiler, linker, firmware, or emulator issue is release-blocking. A
+milestone remains a candidate until the matching QEMU smoke gate passes from a
+clean checkout.

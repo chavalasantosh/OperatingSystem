@@ -8,7 +8,7 @@
 4. Deterministic image and artifact validation.
 5. Reference-laptop tests only after safety gates.
 
-## Current M0 gates
+## Current gates
 
 - `cargo fmt --check`;
 - Clippy with warnings denied;
@@ -17,6 +17,8 @@
 - headless QEMU boot;
 - expected milestone strings observed through debug I/O;
 - explicit QEMU success exit code.
+- exact attached-device topology for hardware-driver milestones;
+- every previously accepted milestone rerun as a regression gate.
 
 ## Future gates
 

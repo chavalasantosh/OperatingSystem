@@ -60,6 +60,25 @@
 - exact frame inventories must return the bootstrap pool to its prior count;
 - M5 user-fault recovery is rerun under private CR3 roots.
 
+## M6 storage attack surface
+
+- malformed or cyclic PCI bridge topology;
+- concurrent PCI configuration-port access;
+- untrusted BAR and capability-list metadata;
+- device-controlled DMA addresses and lengths;
+- malformed sector geometry, partition tables, FAT metadata, and cluster chains;
+- accidental selection of the EFI system partition or a physical user disk.
+
+## M6 controls
+
+- bounded PCI device and bus inventories fail closed on overflow;
+- x86 configuration transactions are serialized on the bootstrap CPU;
+- M6A performs discovery only and cannot issue block requests;
+- M6B uses a disposable, explicitly identified second QEMU disk;
+- filesystem work begins read-only with geometry and bounds validation;
+- persistent writes remain blocked until reboot, corruption, and recovery gates
+  are implemented.
+
 ## Security gates before physical installation
 
 - verified boot artifact provenance;
