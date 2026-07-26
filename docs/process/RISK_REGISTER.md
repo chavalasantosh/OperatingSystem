@@ -14,3 +14,6 @@
 | R-010 | CR3 and TSS stack selection diverge | Medium | Critical | single scheduler transition function and private-root smoke probe |
 | R-011 | Process teardown leaks or double-frees page tables | Medium | High | exact frame inventory, inactive-root guard, reverse reclamation, pool-count check |
 | R-012 | Legacy PIT/PIC results do not generalize to SMP | High | High | explicit single-core boundary; APIC/SMP remains a separate milestone |
+| R-013 | PCI enumeration races configuration access | Low | High | single-CPU ownership and interrupt serialization during M6A |
+| R-014 | Malformed PCI topology overflows fixed discovery state | Medium | High | bounded inventory/bridge queue and fail-closed completeness gate |
+| R-015 | DMA or block writes corrupt memory or persistent media | Medium | Critical | separate M6B gate, disposable second disk, bounds/timeouts, no M6A I/O |

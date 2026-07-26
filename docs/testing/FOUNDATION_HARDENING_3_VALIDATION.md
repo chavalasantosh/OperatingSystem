@@ -8,7 +8,7 @@ acceptance gate.
 
 ## Static and host checks
 
-- generated capability registry version 3 is synchronized;
+- FH3 capability entries remain synchronized in the generated registry;
 - the complete interrupt-frame ABI is exactly 160 bytes;
 - `RIP`, `CS`, and user `RSP` offsets match the assembly push/pop order;
 - private-root cloning removes inherited `USER` bits;

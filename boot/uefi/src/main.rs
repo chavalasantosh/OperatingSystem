@@ -24,15 +24,16 @@ use sanju_kernel::memory::{
 };
 use sanju_kernel::ownership::{OwnershipError, OwnershipKind, PhysicalOwnershipMap};
 use sanju_kernel::paging::{GuardedStack, PageFlags, PagingError, VirtualPage};
+use sanju_kernel::pci::StorageControllerKind;
 use sanju_kernel::process::{AddressSpace, ProcessTable};
 use sanju_kernel::scheduler::{Scheduler, TaskKind};
 use sanju_kernel::shell::{Shell, ShellEnvironment};
 use sanju_kernel::startup::{self, StartupStage};
 use sanju_kernel::{
     BootInfo, Console, FoundationHardeningPhase2Report, FoundationHardeningPhase3Report,
-    FoundationHardeningReport, M5Report, MemoryMapInfo, kernel_main_foundation_hardening,
-    kernel_main_foundation_hardening_phase2, kernel_main_foundation_hardening_phase3,
-    kernel_main_m5,
+    FoundationHardeningReport, M5Report, M6aReport, MemoryMapInfo,
+    kernel_main_foundation_hardening, kernel_main_foundation_hardening_phase2,
+    kernel_main_foundation_hardening_phase3, kernel_main_m5, kernel_main_m6a,
 };
 
 type EfiHandle = *mut c_void;
@@ -1249,6 +1250,15 @@ extern "efiapi" fn sanju_m5_kernel_entry() -> ! {
         == m5_private_table_frames.saturating_add(probe_private_table_frames)
         && hardware_page_tables.pool_remaining() == process_pool_remaining_before;
 
+    // SAFETY: The bootstrap CPU exclusively owns PCI configuration mechanism
+    // #1. Discovery serializes CF8/CFC access with interrupts disabled.
+    let pci_discovery = unsafe { cpu::discover_pci() };
+    let pci_functions = pci_discovery.inventory.len();
+    let storage_controllers = pci_discovery.inventory.storage_controller_count();
+    let virtio_block_targets = pci_discovery
+        .inventory
+        .storage_kind_count(StorageControllerKind::VirtioBlock);
+
     let mut scheduler = Scheduler::new();
     let scheduler_ready = scheduler.add_task(TaskKind::Idle).is_some()
         && scheduler.add_task(TaskKind::Shell).is_some()
@@ -1272,6 +1282,9 @@ extern "efiapi" fn sanju_m5_kernel_entry() -> ! {
         scheduler_tasks: scheduler_stats.task_count,
         scheduler_switches: scheduler_stats.context_switches,
         scheduler_dispatches: scheduler_stats.dispatches,
+        pci_functions,
+        storage_controllers,
+        virtio_block_targets,
     };
     for byte in b"version\nuserspace\n" {
         shell.feed_byte(*byte, &mut null_console, &mut ramfs, &self_test_environment);
@@ -1338,7 +1351,7 @@ extern "efiapi" fn sanju_m5_kernel_entry() -> ! {
     let foundation_report = FoundationHardeningReport {
         toolchain_pinned: true,
         capability_registry_synchronized: sanju_kernel::generated::capabilities::REGISTRY_VERSION
-            == 3,
+            == 4,
         architecture_separation_verified: true,
         boot_info_version: boot_info.version,
         ownership_map_active: !ownership_map.is_empty(),
@@ -1431,6 +1444,24 @@ extern "efiapi" fn sanju_m5_kernel_entry() -> ! {
         );
     }
 
+    let m6a_report = M6aReport {
+        configuration_mechanism_one_active: pci_discovery.configuration_mechanism_one_active,
+        inventory_complete: pci_discovery.inventory_complete,
+        buses_scanned: pci_discovery.buses_scanned,
+        pci_functions_discovered: pci_functions,
+        storage_controllers_discovered: storage_controllers,
+        virtio_block_targets_discovered: virtio_block_targets,
+        fh3_regression_passed: phase3_report.gate_passed(),
+    };
+    kernel_main_m6a(&mut console, m6a_report);
+    if !m6a_report.gate_passed() {
+        boot_failure(
+            &mut console,
+            "M6A-PCI-001",
+            "PCI and storage discovery acceptance gate failed",
+        );
+    }
+
     startup::print_stage(&mut console, StartupStage::Shell, true);
     Shell::start(&mut console);
 
@@ -1446,8 +1477,11 @@ extern "efiapi" fn sanju_m5_kernel_entry() -> ! {
             scheduler_tasks: scheduler_stats.task_count,
             scheduler_switches: scheduler_stats.context_switches,
             scheduler_dispatches: scheduler_stats.dispatches,
+            pci_functions,
+            storage_controllers,
+            virtio_block_targets,
         };
-        let smoke_commands = b"help\nuserspace\nls\ncat welcome.txt\ntasks\nuptime\n";
+        let smoke_commands = b"help\nuserspace\npci\nls\ncat welcome.txt\ntasks\nuptime\n";
         for byte in smoke_commands {
             shell.feed_byte(*byte, &mut console, &mut ramfs, &environment);
         }
@@ -1478,6 +1512,9 @@ extern "efiapi" fn sanju_m5_kernel_entry() -> ! {
                         scheduler_tasks: stats.task_count,
                         scheduler_switches: stats.context_switches,
                         scheduler_dispatches: stats.dispatches,
+                        pci_functions,
+                        storage_controllers,
+                        virtio_block_targets,
                     };
                     shell.feed_byte(byte, &mut console, &mut ramfs, &environment);
                 }

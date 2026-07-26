@@ -20,6 +20,9 @@ pub struct ShellEnvironment {
     pub scheduler_tasks: usize,
     pub scheduler_switches: u64,
     pub scheduler_dispatches: u64,
+    pub pci_functions: usize,
+    pub storage_controllers: usize,
+    pub virtio_block_targets: usize,
 }
 
 /// Interactive line editor and command dispatcher.
@@ -122,11 +125,12 @@ fn execute_line(
 
     match command {
         "help" => {
-            console.write_line(
-                "Commands: help version uptime memory irq tasks ls cat write echo clear userspace",
-            );
+            console.write_line(concat!(
+                "Commands: help version uptime memory irq tasks pci ls cat write echo ",
+                "clear userspace",
+            ));
         }
-        "version" => console.write_line("SanjuOS 0.0.8-prealpha (FH3)"),
+        "version" => console.write_line("SanjuOS 0.0.9-prealpha (M6A)"),
         "uptime" => {
             console.write_str("Timer ticks: ");
             console.write_u64(environment.timer_ticks);
@@ -153,6 +157,15 @@ fn execute_line(
             console.write_u64(environment.scheduler_switches);
             console.write_str(", dispatches: ");
             console.write_u64(environment.scheduler_dispatches);
+            console.write_line("");
+        }
+        "pci" => {
+            console.write_str("PCI functions: ");
+            console.write_usize(environment.pci_functions);
+            console.write_str(", storage controllers: ");
+            console.write_usize(environment.storage_controllers);
+            console.write_str(", virtio-blk targets: ");
+            console.write_usize(environment.virtio_block_targets);
             console.write_line("");
         }
         "ls" => {
@@ -246,12 +259,23 @@ mod tests {
         let mut fs = RamFs::with_defaults();
         Shell::start(&mut console);
 
-        for byte in b"write note.txt hello\ncat note.txt\n" {
-            shell.feed_byte(*byte, &mut console, &mut fs, &ShellEnvironment::default());
+        let environment = ShellEnvironment {
+            pci_functions: 7,
+            storage_controllers: 2,
+            virtio_block_targets: 1,
+            ..ShellEnvironment::default()
+        };
+        for byte in b"write note.txt hello\ncat note.txt\npci\n" {
+            shell.feed_byte(*byte, &mut console, &mut fs, &environment);
         }
 
         assert!(console.output.contains("written\r\n"));
         assert!(console.output.contains("hello\r\n"));
-        assert_eq!(shell.commands_executed(), 2);
+        assert!(
+            console
+                .output
+                .contains("PCI functions: 7, storage controllers: 2, virtio-blk targets: 1\r\n")
+        );
+        assert_eq!(shell.commands_executed(), 3);
     }
 }

@@ -12,15 +12,17 @@ command -v qemu-system-x86_64 >/dev/null 2>&1 || {
 bash ./scripts/build-smoke.sh
 OVMF_CODE=$(bash ./scripts/find-ovmf.sh)
 OVMF_VARS_TEMPLATE="${OVMF_CODE/OVMF_CODE/OVMF_VARS}"
-OVMF_VARS_COPY="$(mktemp /tmp/sanjuos-ovmf-vars.XXXXXX.fd)"
 
 if [[ ! -f "$OVMF_VARS_TEMPLATE" ]]; then
     echo "error: OVMF variables file not found: $OVMF_VARS_TEMPLATE" >&2
     exit 1
 fi
 
+OVMF_VARS_COPY="$(mktemp /tmp/sanjuos-ovmf-vars.XXXXXX.fd)"
+STORAGE_IMAGE="$(mktemp /tmp/sanjuos-storage.XXXXXX.img)"
+trap 'rm -f "$OVMF_VARS_COPY" "$STORAGE_IMAGE"' EXIT
 cp "$OVMF_VARS_TEMPLATE" "$OVMF_VARS_COPY"
-trap 'rm -f "$OVMF_VARS_COPY"' EXIT
+truncate -s 8M "$STORAGE_IMAGE"
 mkdir -p build
 rm -f build/qemu-debug.log
 
@@ -32,6 +34,8 @@ timeout 20s qemu-system-x86_64 \
   -drive if=pflash,format=raw,readonly=on,file="$OVMF_CODE" \
   -drive if=pflash,format=raw,file="$OVMF_VARS_COPY" \
   -drive format=raw,file=fat:rw:build/smoke-esp \
+  -drive if=none,id=sanju-storage,format=raw,file="$STORAGE_IMAGE" \
+  -device virtio-blk-pci,drive=sanju-storage,serial=SANJU-M6A \
   -display none \
   -serial none \
   -monitor none \
@@ -86,8 +90,16 @@ grep -Fq "Ring 3 preemption processes: 2" build/qemu-debug.log
 grep -Fq "M5 regression under private CR3: passed" build/qemu-debug.log
 grep -Fq "FH2 paging regression under FH3: passed" build/qemu-debug.log
 grep -Fq "Foundation hardening phase 3: passed" build/qemu-debug.log
+grep -Fq "SanjuOS M6A PCI and Storage Discovery" build/qemu-debug.log
+grep -Fq "PCI configuration mechanism #1: active" build/qemu-debug.log
+grep -Fq "PCI inventory completeness: active" build/qemu-debug.log
+grep -Fq "Virtio block PCI target: active" build/qemu-debug.log
+grep -Fq "Storage driver target: virtio-blk-pci" build/qemu-debug.log
+grep -Fq "FH3 regression under M6A: passed" build/qemu-debug.log
+grep -Fq "M6A PCI discovery gate: passed" build/qemu-debug.log
 grep -Fq "SanjuOS kernel shell ready." build/qemu-debug.log
 grep -Fq "M5 protected userspace, syscalls, and ELF loader are active." build/qemu-debug.log
+grep -Fq "virtio-blk targets: 1" build/qemu-debug.log
 
 echo "QEMU smoke test passed."
 cat build/qemu-debug.log

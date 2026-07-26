@@ -1,6 +1,20 @@
 # Changelog
 
-## Foundation Hardening Phase 3 — 2026-07-26
+## M6A PCI and Storage Discovery candidate — 2026-07-26
+
+- Architecture-independent PCI identity and storage classification.
+- x86 PCI configuration-mechanism #1 presence probe and enumeration.
+- Multifunction and PCI bridge traversal with fixed-capacity fail-closed state.
+- QEMU dedicated virtio-blk second-disk topology.
+- Hardware virtio block target matching without block I/O.
+- PCI diagnostics in the kernel shell.
+- Capability registry version 4 and M6A acceptance evidence.
+- FH3 preserved as a mandatory regression gate.
+
+M6A cannot issue sector reads or writes. Virtio capability parsing, DMA,
+request queues, and the block-device API remain the M6B gate.
+
+## Foundation Hardening Phase 3 (`v0.0.8-fh3`) — 2026-07-26
 
 - Deep-cloned private four-level roots for all M5 processes.
 - Sanitized inherited user permissions and explicit process-owned promotion.

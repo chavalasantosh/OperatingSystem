@@ -1,4 +1,4 @@
-registry_version = 3
+registry_version = 4
 
 [[capability]]
 id = "SYS-TC-001"
@@ -192,3 +192,45 @@ status = "planned"
 milestone = "m6"
 evidence = ["assets/branding/sanjuos-logo.png"]
 boot_label = "Graphical startup"
+
+[[capability]]
+id = "PCI-ENUM-001"
+name = "PCI configuration mechanism #1 enumeration"
+status = "hardware_active"
+milestone = "m6a"
+evidence = ["kernel/src/pci.rs", "boot/uefi/src/arch/x86_64/pci.rs", "scripts/smoke-test.sh"]
+boot_label = "PCI configuration mechanism #1"
+required_boot_line = "PCI configuration mechanism #1: active"
+
+[[capability]]
+id = "STOR-DISC-001"
+name = "Virtio block PCI target discovery"
+status = "hardware_active"
+milestone = "m6a"
+evidence = ["kernel/src/pci.rs", "boot/uefi/src/arch/x86_64/pci.rs", "scripts/smoke-test.sh"]
+boot_label = "Virtio block PCI target"
+required_boot_line = "Virtio block PCI target: active"
+
+[[capability]]
+id = "STOR-BLK-001"
+name = "Architecture-independent block-device API"
+status = "planned"
+milestone = "m6b"
+evidence = ["docs/process/SPRINT_M6_STORAGE_FOUNDATION.md"]
+boot_label = "Block-device API"
+
+[[capability]]
+id = "VFS-CORE-001"
+name = "VFS inode, mount, path, and handle contracts"
+status = "planned"
+milestone = "m6c"
+evidence = ["docs/process/SPRINT_M6_STORAGE_FOUNDATION.md"]
+boot_label = "Virtual filesystem"
+
+[[capability]]
+id = "FS-FAT32-001"
+name = "Read-only FAT32 persistent filesystem"
+status = "planned"
+milestone = "m6d"
+evidence = ["docs/process/SPRINT_M6_STORAGE_FOUNDATION.md"]
+boot_label = "FAT32 filesystem"

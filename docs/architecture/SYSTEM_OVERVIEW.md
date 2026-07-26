@@ -114,3 +114,18 @@ inventory.
 The scheduler remains single-core and PIT-driven. SMP, local APIC timers, PCID,
 copy-on-write, demand paging, and a separately linked high-half kernel image are
 future architecture gates.
+
+## M6 storage layering
+
+```text
+x86 PCI configuration mechanism #1
+    -> bounded PCI inventory and storage matching (M6A)
+    -> virtio-blk transport and block-device API (M6B)
+    -> bounded buffer cache and VFS objects (M6C)
+    -> read-only FAT32 on a dedicated second disk (M6D)
+```
+
+Raw configuration and future device-register access stay in the x86-64
+adapter. PCI identity, block contracts, cache policy, VFS types, and filesystem
+validation remain architecture-independent. The EFI system partition is not a
+storage-development target.
