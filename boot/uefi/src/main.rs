@@ -1790,6 +1790,7 @@ fn capture_memory_map(get_memory_map: GetMemoryMap) -> Result<MemoryMapSnapshot,
     Ok(MemoryMapSnapshot { info })
 }
 
+#[cfg(not(test))]
 #[panic_handler]
 fn panic(_info: &PanicInfo<'_>) -> ! {
     let mut console = KernelConsole::initialize();
