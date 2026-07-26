@@ -30,6 +30,7 @@ const IMAGE_SCN_MEM_WRITE: u32 = 0x8000_0000;
 const MAX_IMAGE_SECTIONS: usize = 96;
 const MAX_BOOT_PHYSICAL_BYTES: u64 = MAX_DIRECT_MAP_BYTES;
 const MAX_INHERITED_TABLE_FRAMES: usize = 512;
+const MAX_PRIVATE_TABLE_FRAMES: usize = 64;
 const IA32_EFER: u32 = 0xc000_0080;
 const EFER_NXE: u64 = 1 << 11;
 const CR0_WRITE_PROTECT: u64 = 1 << 16;
@@ -85,6 +86,70 @@ struct ImageSection {
     virtual_address: u64,
     virtual_size: u64,
     characteristics: u32,
+}
+
+/// One existing kernel-owned range promoted into a private Ring 3 address
+/// space.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct UserMapping {
+    pub start: u64,
+    pub length: usize,
+    pub executable: bool,
+}
+
+/// A private four-level hierarchy cloned from the kernel root.
+///
+/// Every page-table frame is retained so the hierarchy can be reclaimed after
+/// the process exits. User permission bits are stripped while cloning and are
+/// then restored only for explicitly supplied process mappings.
+pub struct PrivateAddressSpace {
+    root: PhysicalFrame,
+    table_frames: [PhysicalFrame; MAX_PRIVATE_TABLE_FRAMES],
+    table_frame_count: usize,
+    user_pages: usize,
+    guard_holes: usize,
+}
+
+impl PrivateAddressSpace {
+    const fn empty() -> Self {
+        Self {
+            root: PhysicalFrame::ZERO,
+            table_frames: [PhysicalFrame::ZERO; MAX_PRIVATE_TABLE_FRAMES],
+            table_frame_count: 0,
+            user_pages: 0,
+            guard_holes: 0,
+        }
+    }
+
+    #[must_use]
+    pub const fn root_address(&self) -> u64 {
+        self.root.start_address()
+    }
+
+    #[must_use]
+    pub const fn table_frame_count(&self) -> usize {
+        self.table_frame_count
+    }
+
+    #[must_use]
+    pub const fn user_pages(&self) -> usize {
+        self.user_pages
+    }
+
+    #[must_use]
+    pub const fn guard_holes(&self) -> usize {
+        self.guard_holes
+    }
+
+    #[must_use]
+    pub fn translates(&self, virtual_address: u64) -> Option<u64> {
+        translate_from_root(self.root.start_address(), virtual_address)
+    }
+
+    #[must_use]
+    pub fn user_accessible(&self, virtual_address: u64) -> bool {
+        user_accessible_from_root(self.root.start_address(), virtual_address)
+    }
 }
 
 pub struct HardwarePageTable<'a> {
@@ -316,6 +381,137 @@ impl<'a> HardwarePageTable<'a> {
     #[must_use]
     pub fn flags_for(&self, virtual_address: u64) -> Option<PageFlags> {
         flags_from_root(self.root.start_address(), virtual_address)
+    }
+
+    /// Creates a private process root from the active kernel hierarchy.
+    ///
+    /// The clone retains supervisor mappings required for interrupt and
+    /// syscall entry, removes every inherited user bit, promotes only the
+    /// requested process ranges, and clears both user and Ring 0 guard PTEs.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error for an invalid range, a huge-page collision in a
+    /// process-owned mapping, page-table exhaustion, or a corrupt hierarchy.
+    pub fn create_private_address_space(
+        &mut self,
+        mappings: &[UserMapping],
+        guard_pages: &[VirtualPage],
+    ) -> Result<PrivateAddressSpace, PagingError> {
+        let mut space = PrivateAddressSpace::empty();
+        let result = (|| {
+            let root = self.clone_private_table(self.root, 4, &mut space)?;
+            space.root = root;
+
+            for mapping in mappings {
+                let promoted = mark_user_range_in_root(
+                    root.start_address(),
+                    mapping.start,
+                    mapping.length,
+                    mapping.executable,
+                )?;
+                space.user_pages = space
+                    .user_pages
+                    .checked_add(promoted)
+                    .ok_or(PagingError::AddressOverflow)?;
+            }
+            for page in guard_pages {
+                clear_leaf_in_root(root.start_address(), *page)?;
+                if translate_from_root(root.start_address(), page.start_address()).is_some() {
+                    return Err(PagingError::CorruptHierarchy);
+                }
+                space.guard_holes = space
+                    .guard_holes
+                    .checked_add(1)
+                    .ok_or(PagingError::AddressOverflow)?;
+            }
+            Ok(())
+        })();
+
+        if let Err(error) = result {
+            self.release_private_frames(&space);
+            return Err(error);
+        }
+        Ok(space)
+    }
+
+    /// Returns all page-table frames belonging to an inactive process root.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the supplied root is still active or if the
+    /// bootstrap pool rejects one of its recorded frames.
+    pub fn reclaim_private_address_space(
+        &mut self,
+        space: PrivateAddressSpace,
+    ) -> Result<usize, PagingError> {
+        if read_cr3() == space.root.start_address() {
+            return Err(PagingError::InvalidUserAddress);
+        }
+        for index in (0..space.table_frame_count).rev() {
+            self.pool
+                .free(space.table_frames[index])
+                .map_err(|_| PagingError::CorruptHierarchy)?;
+        }
+        Ok(space.table_frame_count)
+    }
+
+    fn clone_private_table(
+        &mut self,
+        source: PhysicalFrame,
+        level: u8,
+        space: &mut PrivateAddressSpace,
+    ) -> Result<PhysicalFrame, PagingError> {
+        let destination = self.allocate_private_table(space)?;
+        for index in 0..ENTRIES_PER_TABLE {
+            let value = table_entry_value(source, index)?;
+            if value & PageFlags::PRESENT.bits() == 0 {
+                continue;
+            }
+            let sanitized = value & !PageFlags::USER.bits();
+            let cloned = if level == 1 || value & PageFlags::HUGE.bits() != 0 {
+                sanitized
+            } else {
+                let child = child_frame(value)?;
+                let cloned_child =
+                    self.clone_private_table(child, level.saturating_sub(1), space)?;
+                cloned_child.start_address() | (sanitized & ENTRY_FLAG_MASK)
+            };
+            let destination_entry = table_entry_pointer(destination, index)?;
+            // SAFETY: The destination table is zeroed, private, and has one
+            // writer during construction.
+            unsafe {
+                destination_entry.write_volatile(cloned);
+            }
+        }
+        Ok(destination)
+    }
+
+    fn allocate_private_table(
+        &mut self,
+        space: &mut PrivateAddressSpace,
+    ) -> Result<PhysicalFrame, PagingError> {
+        if space.table_frame_count == space.table_frames.len() {
+            return Err(PagingError::MappingTableFull);
+        }
+        let frame = self
+            .pool
+            .allocate()
+            .ok_or(PagingError::BootstrapPoolExhausted)?;
+        // SAFETY: The pool has transferred exclusive ownership of this frame
+        // to the private hierarchy under construction.
+        unsafe {
+            zero_table(frame)?;
+        }
+        space.table_frames[space.table_frame_count] = frame;
+        space.table_frame_count += 1;
+        Ok(frame)
+    }
+
+    fn release_private_frames(&mut self, space: &PrivateAddressSpace) {
+        for index in (0..space.table_frame_count).rev() {
+            let _ = self.pool.free(space.table_frames[index]);
+        }
     }
 
     fn leaf_entry(
@@ -710,6 +906,25 @@ pub fn active_page_table_root() -> u64 {
     read_cr3()
 }
 
+/// Activates a validated private or kernel four-level hierarchy.
+///
+/// # Safety
+///
+/// The root must map the executing kernel, current stack, GDT, IDT, TSS, and
+/// direct-map window. The hierarchy must remain allocated until another root
+/// is installed.
+pub unsafe fn switch_address_space(root: u64) -> bool {
+    if PhysicalFrame::from_start_address(root).is_none() {
+        return false;
+    }
+    // SAFETY: The caller guarantees that the complete kernel execution
+    // environment is mapped by the supplied root.
+    unsafe {
+        write_cr3(root);
+    }
+    read_cr3() == root
+}
+
 /// Promotes an existing range to Ring 3 visibility under the active SanjuOS
 /// hierarchy. Executable user pages are made read-only; user stacks are made
 /// writable and NX.
@@ -813,11 +1028,19 @@ unsafe fn mark_active_user_page(address: u64, executable: bool) -> bool {
 }
 
 fn update_direct_alias_permissions(physical_page: u64, executable_alias: bool) -> bool {
+    update_direct_alias_permissions_for_root(read_cr3(), physical_page, executable_alias)
+}
+
+fn update_direct_alias_permissions_for_root(
+    root: u64,
+    physical_page: u64,
+    executable_alias: bool,
+) -> bool {
     let Some(direct_address) = PHYSICAL_DIRECT_MAP_START.checked_add(physical_page) else {
         return false;
     };
     let indices = PageTableIndices::from_address(direct_address);
-    let mut table = match PhysicalFrame::from_start_address(read_cr3()) {
+    let mut table = match PhysicalFrame::from_start_address(root) {
         Some(frame) => frame,
         None => return false,
     };
@@ -856,10 +1079,168 @@ fn update_direct_alias_permissions(physical_page: u64, executable_alias: bool) -
             unsafe {
                 pointer.write_volatile(value);
             }
-            invalidate_page(direct_address);
+            invalidate_if_active(root, direct_address);
             return true;
         }
         let Some(child) = PhysicalFrame::from_start_address(value & ADDRESS_MASK) else {
+            return false;
+        };
+        table = child;
+    }
+    false
+}
+
+fn mark_user_range_in_root(
+    root: u64,
+    start: u64,
+    length: usize,
+    executable: bool,
+) -> Result<usize, PagingError> {
+    if root == 0 || length == 0 || !is_canonical(start) {
+        return Err(PagingError::InvalidUserAddress);
+    }
+    let length = u64::try_from(length).map_err(|_| PagingError::AddressOverflow)?;
+    let end = start
+        .checked_add(length.saturating_sub(1))
+        .ok_or(PagingError::AddressOverflow)?;
+    if !is_canonical(end) {
+        return Err(PagingError::InvalidUserAddress);
+    }
+    let mut page = align_down(start, PAGE_SIZE);
+    let last = align_down(end, PAGE_SIZE);
+    let mut promoted = 0_usize;
+    loop {
+        mark_user_page_in_root(root, page, executable)?;
+        promoted = promoted
+            .checked_add(1)
+            .ok_or(PagingError::AddressOverflow)?;
+        if page == last {
+            return Ok(promoted);
+        }
+        page = page
+            .checked_add(PAGE_SIZE)
+            .ok_or(PagingError::AddressOverflow)?;
+    }
+}
+
+fn mark_user_page_in_root(root: u64, address: u64, executable: bool) -> Result<(), PagingError> {
+    let indices = PageTableIndices::from_address(address);
+    let mut table = PhysicalFrame::from_start_address(root).ok_or(PagingError::CorruptHierarchy)?;
+    for (level, index) in [
+        indices.pml4,
+        indices.pdpt,
+        indices.page_directory,
+        indices.page_table,
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let pointer = table_entry_pointer(table, index)?;
+        // SAFETY: The private hierarchy is inactive while it is configured.
+        let mut value = unsafe { pointer.read_volatile() };
+        if value & PageFlags::PRESENT.bits() == 0 {
+            return Err(PagingError::NotMapped);
+        }
+        if level >= 1 && value & PageFlags::HUGE.bits() != 0 {
+            return Err(PagingError::HugePageConflict);
+        }
+        value |= PageFlags::USER.bits();
+        let is_leaf = level == 3;
+        if is_leaf {
+            if executable {
+                value &= !PageFlags::NO_EXECUTE.bits();
+                value &= !PageFlags::WRITABLE.bits();
+            } else {
+                value |= PageFlags::NO_EXECUTE.bits();
+                value |= PageFlags::WRITABLE.bits();
+            }
+        }
+        // SAFETY: The physical target is preserved and this root has not yet
+        // been published to the scheduler.
+        unsafe {
+            pointer.write_volatile(value);
+        }
+        if is_leaf {
+            invalidate_if_active(root, address);
+            let physical_page = translate_from_root(root, address)
+                .map(|physical| align_down(physical, PAGE_SIZE))
+                .ok_or(PagingError::NotMapped)?;
+            if !update_direct_alias_permissions_for_root(root, physical_page, executable) {
+                return Err(PagingError::CorruptHierarchy);
+            }
+            return Ok(());
+        }
+        table = PhysicalFrame::from_start_address(value & ADDRESS_MASK)
+            .ok_or(PagingError::CorruptHierarchy)?;
+    }
+    Err(PagingError::CorruptHierarchy)
+}
+
+fn clear_leaf_in_root(root: u64, page: VirtualPage) -> Result<(), PagingError> {
+    let indices = PageTableIndices::from_address(page.start_address());
+    let mut table = PhysicalFrame::from_start_address(root).ok_or(PagingError::CorruptHierarchy)?;
+    for (level, index) in [
+        indices.pml4,
+        indices.pdpt,
+        indices.page_directory,
+        indices.page_table,
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let pointer = table_entry_pointer(table, index)?;
+        // SAFETY: The private hierarchy is inactive and exclusively owned.
+        let value = unsafe { pointer.read_volatile() };
+        if value & PageFlags::PRESENT.bits() == 0 {
+            return Ok(());
+        }
+        if level >= 1 && value & PageFlags::HUGE.bits() != 0 {
+            return Err(PagingError::HugePageConflict);
+        }
+        if level == 3 {
+            // SAFETY: Clearing this leaf creates the requested guard hole.
+            unsafe {
+                pointer.write_volatile(0);
+            }
+            invalidate_if_active(root, page.start_address());
+            return Ok(());
+        }
+        table = child_frame(value)?;
+    }
+    Err(PagingError::CorruptHierarchy)
+}
+
+fn user_accessible_from_root(root: u64, virtual_address: u64) -> bool {
+    if root == 0 || !is_canonical(virtual_address) {
+        return false;
+    }
+    let indices = PageTableIndices::from_address(virtual_address);
+    let mut table = match PhysicalFrame::from_start_address(root) {
+        Some(frame) => frame,
+        None => return false,
+    };
+    for (level, index) in [
+        indices.pml4,
+        indices.pdpt,
+        indices.page_directory,
+        indices.page_table,
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let Ok(value) = table_entry_value(table, index) else {
+            return false;
+        };
+        if value & PageFlags::PRESENT.bits() == 0 || value & PageFlags::USER.bits() == 0 {
+            return false;
+        }
+        if level >= 1 && value & PageFlags::HUGE.bits() != 0 {
+            return true;
+        }
+        if level == 3 {
+            return true;
+        }
+        let Ok(child) = child_frame(value) else {
             return false;
         };
         table = child;

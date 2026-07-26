@@ -7,8 +7,9 @@ mod serial;
 pub mod qemu;
 
 pub(crate) use paging::{
-    active_page_table_root, kernel_guard_base, kernel_heap_probe_page, mark_user_range,
-    reserve_inherited_page_tables, take_page_table_ownership,
+    UserMapping, active_page_table_root, kernel_guard_base, kernel_heap_probe_page,
+    mark_user_range, reserve_inherited_page_tables, switch_address_space,
+    take_page_table_ownership,
 };
 pub use serial::SerialConsole;
 
@@ -27,6 +28,15 @@ const KERNEL_STACK_SIZE: usize = 64 * 1024;
 const DOUBLE_FAULT_STACK_SIZE: usize = 32 * 1024;
 const SYSCALL_STACK_SIZE: usize = 64 * 1024;
 const USER_INTERRUPT_STACK_SIZE: usize = 64 * 1024;
+const PROCESS_KERNEL_STACK_SIZE: usize = 64 * 1024;
+const PROCESS_KERNEL_STACK_TOTAL_SIZE: usize = PROCESS_KERNEL_STACK_SIZE + 2 * 4096;
+const FH3_USER_STACK_SIZE: usize = 64 * 1024;
+const FH3_USER_STACK_TOTAL_SIZE: usize = FH3_USER_STACK_SIZE + 2 * 4096;
+const PROCESS_KERNEL_STACK_COUNT: usize = 5;
+const FH3_PROCESS_COUNT: usize = 2;
+const FH3_COUNTER_TARGET: u64 = 1_024;
+const FH3_R12_A: u64 = 0x5341_4e4a_554f_5301;
+const FH3_R12_B: u64 = 0x5341_4e4a_554f_5302;
 const IDT_ENTRY_COUNT: usize = 256;
 const PIC_MASTER_COMMAND: u16 = 0x20;
 const PIC_MASTER_DATA: u16 = 0x21;
@@ -56,11 +66,28 @@ struct SyscallStack([u8; SYSCALL_STACK_SIZE]);
 #[repr(C, align(16))]
 struct UserInterruptStack([u8; USER_INTERRUPT_STACK_SIZE]);
 
+#[repr(C, align(4096))]
+struct ProcessKernelStack([u8; PROCESS_KERNEL_STACK_TOTAL_SIZE]);
+
+#[repr(C, align(4096))]
+struct Fh3UserStack([u8; FH3_USER_STACK_TOTAL_SIZE]);
+
 static mut KERNEL_STACK: Stack = Stack([0; KERNEL_STACK_SIZE]);
 static mut DOUBLE_FAULT_STACK: DoubleFaultStack = DoubleFaultStack([0; DOUBLE_FAULT_STACK_SIZE]);
 static mut SYSCALL_STACK: SyscallStack = SyscallStack([0; SYSCALL_STACK_SIZE]);
 static mut USER_INTERRUPT_STACK: UserInterruptStack =
     UserInterruptStack([0; USER_INTERRUPT_STACK_SIZE]);
+static mut PROCESS_KERNEL_STACKS: [ProcessKernelStack; PROCESS_KERNEL_STACK_COUNT] = [
+    ProcessKernelStack([0; PROCESS_KERNEL_STACK_TOTAL_SIZE]),
+    ProcessKernelStack([0; PROCESS_KERNEL_STACK_TOTAL_SIZE]),
+    ProcessKernelStack([0; PROCESS_KERNEL_STACK_TOTAL_SIZE]),
+    ProcessKernelStack([0; PROCESS_KERNEL_STACK_TOTAL_SIZE]),
+    ProcessKernelStack([0; PROCESS_KERNEL_STACK_TOTAL_SIZE]),
+];
+static mut FH3_USER_STACKS: [Fh3UserStack; FH3_PROCESS_COUNT] = [
+    Fh3UserStack([0; FH3_USER_STACK_TOTAL_SIZE]),
+    Fh3UserStack([0; FH3_USER_STACK_TOTAL_SIZE]),
+];
 
 #[repr(C, packed)]
 struct TaskStateSegment {
@@ -221,6 +248,163 @@ pub struct UserRunResult {
     pub timer_preemptions: u64,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct GuardedStackLayout {
+    pub lower_guard: u64,
+    pub stack_start: u64,
+    pub stack_size: usize,
+    pub stack_top: u64,
+    pub upper_guard: u64,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct PreemptionProbeProcessLayout {
+    pub entry: u64,
+    pub code_page: u64,
+    pub counter_page: u64,
+    pub user_stack: GuardedStackLayout,
+    pub kernel_stack: GuardedStackLayout,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct PreemptionProbeLayout {
+    pub process_a: PreemptionProbeProcessLayout,
+    pub process_b: PreemptionProbeProcessLayout,
+}
+
+#[allow(clippy::struct_excessive_bools)]
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct PreemptionProbeReport {
+    pub ring3_processes_started: usize,
+    pub timer_preemptions: u64,
+    pub context_switches: u64,
+    pub cr3_switches: u64,
+    pub register_context_checks: u64,
+    pub process_a_counter: u64,
+    pub process_b_counter: u64,
+    pub full_frame_switching_active: bool,
+    pub private_cr3_switching_active: bool,
+    pub per_process_kernel_stacks_active: bool,
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+struct InterruptFrame {
+    r15: u64,
+    r14: u64,
+    r13: u64,
+    r12: u64,
+    r11: u64,
+    r10: u64,
+    r9: u64,
+    r8: u64,
+    rdi: u64,
+    rsi: u64,
+    rbp: u64,
+    rbx: u64,
+    rdx: u64,
+    rcx: u64,
+    rax: u64,
+    rip: u64,
+    cs: u64,
+    rflags: u64,
+    rsp: u64,
+    ss: u64,
+}
+
+impl InterruptFrame {
+    fn user(entry: u64, stack_top: u64, r12: u64) -> Self {
+        Self {
+            r12,
+            rip: entry,
+            cs: u64::from(USER_CODE_SELECTOR | 3),
+            rflags: 0x202,
+            rsp: stack_top,
+            ss: u64::from(USER_DATA_SELECTOR | 3),
+            ..Self::zeroed()
+        }
+    }
+
+    const fn zeroed() -> Self {
+        Self {
+            r15: 0,
+            r14: 0,
+            r13: 0,
+            r12: 0,
+            r11: 0,
+            r10: 0,
+            r9: 0,
+            r8: 0,
+            rdi: 0,
+            rsi: 0,
+            rbp: 0,
+            rbx: 0,
+            rdx: 0,
+            rcx: 0,
+            rax: 0,
+            rip: 0,
+            cs: 0,
+            rflags: 0,
+            rsp: 0,
+            ss: 0,
+        }
+    }
+}
+
+#[derive(Clone, Copy)]
+struct Fh3RuntimeProcess {
+    pid: u32,
+    root: u64,
+    saved_frame: u64,
+    kernel_stack_top: u64,
+    expected_r12: u64,
+}
+
+impl Fh3RuntimeProcess {
+    const fn empty() -> Self {
+        Self {
+            pid: 0,
+            root: 0,
+            saved_frame: 0,
+            kernel_stack_top: 0,
+            expected_r12: 0,
+        }
+    }
+}
+
+#[derive(Clone, Copy)]
+struct Fh3Runtime {
+    active: bool,
+    completed: bool,
+    faulted: bool,
+    current: usize,
+    kernel_root: u64,
+    processes: [Fh3RuntimeProcess; FH3_PROCESS_COUNT],
+    preemptions: u64,
+    context_switches: u64,
+    cr3_switches: u64,
+    register_context_checks: u64,
+}
+
+impl Fh3Runtime {
+    const fn empty() -> Self {
+        Self {
+            active: false,
+            completed: false,
+            faulted: false,
+            current: 0,
+            kernel_root: 0,
+            processes: [Fh3RuntimeProcess::empty(); FH3_PROCESS_COUNT],
+            preemptions: 0,
+            context_switches: 0,
+            cr3_switches: 0,
+            register_context_checks: 0,
+        }
+    }
+}
+
+static mut FH3_RUNTIME: Fh3Runtime = Fh3Runtime::empty();
+
 global_asm!(
     r#"
     .section .text
@@ -324,14 +508,19 @@ sanju_user_page_fault:
     .global sanju_timer_interrupt_stub
 sanju_timer_interrupt_stub:
     SANJU_PUSH_REGISTERS
-    mov r12, rsp
+    mov rcx, rsp
     and rsp, -16
     sub rsp, 32
     cld
     call sanju_timer_interrupt_dispatch
-    mov rsp, r12
+    test rax, rax
+    jz sanju_timer_resume_kernel
+    mov rsp, rax
     SANJU_POP_REGISTERS
     iretq
+sanju_timer_resume_kernel:
+    mov rsp, qword ptr [rip + SANJU_USER_RESUME_RSP]
+    jmp qword ptr [rip + SANJU_USER_RESUME_RIP]
 
     .global sanju_keyboard_interrupt_stub
 sanju_keyboard_interrupt_stub:
@@ -422,6 +611,40 @@ sanju_syscall_entry_stub:
 sanju_syscall_resume_kernel:
     mov rsp, qword ptr [rip + SANJU_USER_RESUME_RSP]
     jmp qword ptr [rip + SANJU_USER_RESUME_RIP]
+
+    .section .text.fh3_user, "ax"
+    .balign 4096
+    .global sanju_fh3_user_a
+sanju_fh3_user_a:
+    movabs r12, 0x53414e4a554f5301
+    lea rax, [rip + SANJU_FH3_COUNTER_A]
+1:
+    inc qword ptr [rax]
+    pause
+    jmp 1b
+
+    .balign 4096
+    .global sanju_fh3_user_b
+sanju_fh3_user_b:
+    movabs r12, 0x53414e4a554f5302
+    lea rax, [rip + SANJU_FH3_COUNTER_B]
+2:
+    inc qword ptr [rax]
+    pause
+    jmp 2b
+
+    .section .data.fh3_counters, "aw"
+    .balign 4096
+    .global SANJU_FH3_COUNTER_A
+SANJU_FH3_COUNTER_A:
+    .quad 0
+    .zero 4088
+
+    .balign 4096
+    .global SANJU_FH3_COUNTER_B
+SANJU_FH3_COUNTER_B:
+    .quad 0
+    .zero 4088
 "#
 );
 
@@ -433,6 +656,13 @@ unsafe extern "C" {
     fn sanju_timer_interrupt_stub();
     fn sanju_keyboard_interrupt_stub();
     fn sanju_syscall_entry_stub();
+    fn sanju_fh3_user_a();
+    fn sanju_fh3_user_b();
+}
+
+unsafe extern "C" {
+    static mut SANJU_FH3_COUNTER_A: u64;
+    static mut SANJU_FH3_COUNTER_B: u64;
 }
 
 unsafe extern "efiapi" {
@@ -476,6 +706,7 @@ pub unsafe fn switch_to_kernel_stack(entry: extern "efiapi" fn() -> !) -> ! {
 /// [`initialize_interrupt_runtime`] installs the interrupt controllers.
 #[must_use]
 pub unsafe fn initialize() -> CpuProtectionReport {
+    debug_assert_eq!(size_of::<InterruptFrame>(), 160);
     // SAFETY: The caller owns early CPU initialization and no other core can
     // access these tables during the single-core boot path.
     unsafe {
@@ -623,10 +854,13 @@ pub unsafe fn run_user_process(
     stack_start: u64,
     stack_size: usize,
     pid: u32,
+    address_space_root: u64,
+    kernel_stack_top: u64,
 ) -> UserRunResult {
     let image_end = image_start.saturating_add(u64::try_from(image_size).unwrap_or(u64::MAX));
 
     let stack_end = stack_start.saturating_add(u64::try_from(stack_size).unwrap_or(u64::MAX));
+    let kernel_root = active_page_table_root();
 
     CURRENT_USER_PID.store(u64::from(pid), Ordering::SeqCst);
     USER_SYSCALLS.store(0, Ordering::SeqCst);
@@ -646,14 +880,29 @@ pub unsafe fn run_user_process(
         SANJU_USER_FAULTED = 0;
     }
 
-    // SAFETY: The active UEFI page tables are identity-accessible in this boot
-    // environment. The routine only promotes the supplied existing mappings to
-    // user accessibility and clears NX for the loaded image.
-    let image_ready = unsafe { mark_user_range(image_start, image_size, true) };
+    // SAFETY: The private hierarchy was cloned from the kernel root and retains
+    // the complete supervisor execution environment.
+    let private_root_active = unsafe { switch_address_space(address_space_root) };
+    if private_root_active {
+        set_process_kernel_stack(kernel_stack_top);
+    }
+
+    // SAFETY: The active private page tables are identity-accessible in this
+    // boot environment. The routine only confirms/promotes the supplied
+    // mappings to user accessibility and clears NX for the loaded image.
+    let image_ready =
+        private_root_active && unsafe { mark_user_range(image_start, image_size, true) };
     // SAFETY: Same contract as above; the user stack remains writable under its
     // existing mapping and is only promoted to Ring 3 visibility.
-    let stack_ready = unsafe { mark_user_range(stack_start, stack_size, false) };
-    if !image_ready || !stack_ready || entry < image_start || entry >= image_end {
+    let stack_ready =
+        private_root_active && unsafe { mark_user_range(stack_start, stack_size, false) };
+    if !private_root_active
+        || !image_ready
+        || !stack_ready
+        || entry < image_start
+        || entry >= image_end
+    {
+        restore_kernel_runtime(kernel_root);
         CURRENT_USER_PID.store(0, Ordering::SeqCst);
         return UserRunResult {
             pid,
@@ -671,6 +920,10 @@ pub unsafe fn run_user_process(
     // SAFETY: Selectors, TSS, syscall MSRs, user mappings, and stack are active.
     unsafe {
         sanju_enter_user_mode_asm(entry, stack_end & !0x0f);
+    }
+    restore_kernel_runtime(kernel_root);
+    // SAFETY: The kernel root and bootstrap interrupt stack are restored.
+    unsafe {
         asm!("sti", options(nomem, nostack, preserves_flags));
     }
 
@@ -905,15 +1158,94 @@ fn enqueue_scancode(scancode: u8) {
 }
 
 #[unsafe(no_mangle)]
-extern "efiapi" fn sanju_timer_interrupt_dispatch() {
+extern "efiapi" fn sanju_timer_interrupt_dispatch(frame: *mut InterruptFrame) -> u64 {
     TIMER_TICKS.fetch_add(1, Ordering::Relaxed);
     if CURRENT_USER_PID.load(Ordering::Relaxed) != 0 {
         USER_TIMER_PREEMPTIONS.fetch_add(1, Ordering::Relaxed);
     }
+    let next_frame = fh3_schedule_from_timer(frame);
     // SAFETY: IRQ0 is serviced by the master PIC.
     unsafe {
         outb(PIC_MASTER_COMMAND, PIC_EOI);
     }
+    next_frame
+}
+
+fn fh3_schedule_from_timer(frame: *mut InterruptFrame) -> u64 {
+    let frame_address = u64::try_from(frame.addr()).unwrap_or(0);
+    if frame.is_null() {
+        return frame_address;
+    }
+    // SAFETY: `cs` is present in both the three-word Ring 0 interrupt tail and
+    // the five-word privilege-transition tail.
+    let came_from_user = unsafe { addr_of!((*frame).cs).read() } & 3 == 3;
+    // SAFETY: The IRQ path is the only writer while the single-core probe is
+    // active, so copying the state avoids references to a mutable static.
+    let mut runtime = unsafe { addr_of!(FH3_RUNTIME).read() };
+    if !runtime.active || !came_from_user {
+        return frame_address;
+    }
+    // SAFETY: A CPL3 interrupt supplies the complete five-word hardware tail,
+    // so all fields of `InterruptFrame` are present.
+    let saved = unsafe { frame.read() };
+
+    let current = runtime.current;
+    runtime.preemptions = runtime.preemptions.saturating_add(1);
+    runtime.processes[current].saved_frame = frame_address;
+    if saved.r12 == runtime.processes[current].expected_r12 {
+        runtime.register_context_checks = runtime.register_context_checks.saturating_add(1);
+    }
+
+    let counters_ready =
+        fh3_counter_value(0) >= FH3_COUNTER_TARGET && fh3_counter_value(1) >= FH3_COUNTER_TARGET;
+    if counters_ready && runtime.context_switches >= 2 {
+        runtime.active = false;
+        runtime.completed = true;
+        restore_kernel_runtime(runtime.kernel_root);
+        // SAFETY: Publish the completed statistics before the assembly
+        // trampoline resumes the original kernel continuation.
+        unsafe {
+            addr_of_mut!(FH3_RUNTIME).write(runtime);
+        }
+        return 0;
+    }
+
+    let next = (current + 1) % FH3_PROCESS_COUNT;
+    let next_process = runtime.processes[next];
+    if next_process.saved_frame == 0 {
+        runtime.active = false;
+        runtime.faulted = true;
+        restore_kernel_runtime(runtime.kernel_root);
+        // SAFETY: Same single-writer state publication as the success path.
+        unsafe {
+            addr_of_mut!(FH3_RUNTIME).write(runtime);
+        }
+        return 0;
+    }
+
+    // SAFETY: Both roots are private clones that retain every supervisor
+    // mapping needed by the interrupt return path.
+    if !unsafe { switch_address_space(next_process.root) } {
+        runtime.active = false;
+        runtime.faulted = true;
+        restore_kernel_runtime(runtime.kernel_root);
+        // SAFETY: Same single-writer state publication as above.
+        unsafe {
+            addr_of_mut!(FH3_RUNTIME).write(runtime);
+        }
+        return 0;
+    }
+    set_process_kernel_stack(next_process.kernel_stack_top);
+    CURRENT_USER_PID.store(u64::from(next_process.pid), Ordering::SeqCst);
+    runtime.current = next;
+    runtime.context_switches = runtime.context_switches.saturating_add(1);
+    runtime.cr3_switches = runtime.cr3_switches.saturating_add(1);
+    // SAFETY: Publish the selected frame before the assembly trampoline reads
+    // the returned pointer and performs POP/IRETQ.
+    unsafe {
+        addr_of_mut!(FH3_RUNTIME).write(runtime);
+    }
+    next_process.saved_frame
 }
 
 #[unsafe(no_mangle)]
@@ -968,6 +1300,275 @@ fn syscall_stack_top() -> usize {
 fn user_interrupt_stack_top() -> usize {
     // SAFETY: This stack is reserved for CPL3-to-CPL0 interrupt transitions.
     unsafe { addr_of_mut!(USER_INTERRUPT_STACK.0).cast::<u8>().addr() + USER_INTERRUPT_STACK_SIZE }
+}
+
+#[must_use]
+pub fn process_kernel_stack_layout(index: usize) -> Option<GuardedStackLayout> {
+    if index >= PROCESS_KERNEL_STACK_COUNT {
+        return None;
+    }
+    // SAFETY: The bounds check selects one element from the static stack
+    // array without creating a reference to the mutable static.
+    let base = unsafe {
+        addr_of_mut!(PROCESS_KERNEL_STACKS)
+            .cast::<ProcessKernelStack>()
+            .add(index)
+            .cast::<u8>()
+            .addr()
+    };
+    guarded_stack_layout(base, PROCESS_KERNEL_STACK_SIZE)
+}
+
+#[must_use]
+pub fn preemption_probe_layout() -> Option<PreemptionProbeLayout> {
+    // Each symbol is page-aligned assembly or static storage retained for the
+    // entire kernel lifetime.
+    let counter_a = addr_of_mut!(SANJU_FH3_COUNTER_A).addr();
+    let counter_b = addr_of_mut!(SANJU_FH3_COUNTER_B).addr();
+    let entry_a = handler_address(sanju_fh3_user_a);
+    let entry_b = handler_address(sanju_fh3_user_b);
+    let user_a = fh3_user_stack_layout(0)?;
+    let user_b = fh3_user_stack_layout(1)?;
+    let kernel_a = process_kernel_stack_layout(3)?;
+    let kernel_b = process_kernel_stack_layout(4)?;
+    Some(PreemptionProbeLayout {
+        process_a: PreemptionProbeProcessLayout {
+            entry: entry_a,
+            code_page: entry_a & !0x0fff,
+            counter_page: u64::try_from(counter_a).ok()?,
+            user_stack: user_a,
+            kernel_stack: kernel_a,
+        },
+        process_b: PreemptionProbeProcessLayout {
+            entry: entry_b,
+            code_page: entry_b & !0x0fff,
+            counter_page: u64::try_from(counter_b).ok()?,
+            user_stack: user_b,
+            kernel_stack: kernel_b,
+        },
+    })
+}
+
+fn fh3_user_stack_layout(index: usize) -> Option<GuardedStackLayout> {
+    if index >= FH3_PROCESS_COUNT {
+        return None;
+    }
+    // SAFETY: The bounds check selects one process-owned stack slot.
+    let base = unsafe {
+        addr_of_mut!(FH3_USER_STACKS)
+            .cast::<Fh3UserStack>()
+            .add(index)
+            .cast::<u8>()
+            .addr()
+    };
+    guarded_stack_layout(base, FH3_USER_STACK_SIZE)
+}
+
+fn guarded_stack_layout(base: usize, stack_size: usize) -> Option<GuardedStackLayout> {
+    if !base.is_multiple_of(4096) || !stack_size.is_multiple_of(4096) {
+        return None;
+    }
+    let stack_start = base.checked_add(4096)?;
+    let stack_top = stack_start.checked_add(stack_size)?;
+    let upper_guard = stack_top;
+    Some(GuardedStackLayout {
+        lower_guard: u64::try_from(base).ok()?,
+        stack_start: u64::try_from(stack_start).ok()?,
+        stack_size,
+        stack_top: u64::try_from(stack_top).ok()?,
+        upper_guard: u64::try_from(upper_guard).ok()?,
+    })
+}
+
+/// Runs two non-cooperative Ring 3 loops under the PIT scheduler.
+///
+/// # Safety
+///
+/// Both roots must be inactive private clones containing the mappings returned
+/// by [`preemption_probe_layout`]. Their page-table frames and all four stack
+/// ranges must remain allocated until this function returns.
+#[must_use]
+pub unsafe fn run_preemption_probe(
+    process_a_root: u64,
+    process_b_root: u64,
+) -> PreemptionProbeReport {
+    let Some(layout) = preemption_probe_layout() else {
+        return PreemptionProbeReport::default();
+    };
+    let kernel_root = active_page_table_root();
+    if process_a_root == 0
+        || process_b_root == 0
+        || process_a_root == process_b_root
+        || process_a_root == kernel_root
+        || process_b_root == kernel_root
+    {
+        return PreemptionProbeReport::default();
+    }
+
+    fh3_set_counter(0, 0);
+    fh3_set_counter(1, 0);
+    let Some(process_b_frame) = prepare_initial_user_frame(
+        layout.process_b.kernel_stack.stack_top,
+        layout.process_b.entry,
+        layout.process_b.user_stack.stack_top,
+        FH3_R12_B,
+    ) else {
+        return PreemptionProbeReport::default();
+    };
+    let runtime = Fh3Runtime {
+        active: true,
+        completed: false,
+        faulted: false,
+        current: 0,
+        kernel_root,
+        processes: [
+            Fh3RuntimeProcess {
+                pid: 0x1001,
+                root: process_a_root,
+                saved_frame: 0,
+                kernel_stack_top: layout.process_a.kernel_stack.stack_top,
+                expected_r12: FH3_R12_A,
+            },
+            Fh3RuntimeProcess {
+                pid: 0x1002,
+                root: process_b_root,
+                saved_frame: process_b_frame,
+                kernel_stack_top: layout.process_b.kernel_stack.stack_top,
+                expected_r12: FH3_R12_B,
+            },
+        ],
+        preemptions: 0,
+        context_switches: 0,
+        cr3_switches: 0,
+        register_context_checks: 0,
+    };
+    // SAFETY: The probe is single-core and interrupts cannot observe the state
+    // until the first private root and TSS stack are installed below.
+    unsafe {
+        addr_of_mut!(FH3_RUNTIME).write(runtime);
+    }
+    CURRENT_USER_PID.store(0x1001, Ordering::SeqCst);
+
+    // SAFETY: The caller supplied a private root cloned from `kernel_root`.
+    if !unsafe { switch_address_space(process_a_root) } {
+        restore_kernel_runtime(kernel_root);
+        return PreemptionProbeReport::default();
+    }
+    set_process_kernel_stack(layout.process_a.kernel_stack.stack_top);
+
+    // SAFETY: The private root maps the page-aligned probe code, counter, user
+    // stack, kernel stack, IDT, GDT, TSS, and complete kernel continuation.
+    unsafe {
+        sanju_enter_user_mode_asm(
+            layout.process_a.entry,
+            layout.process_a.user_stack.stack_top,
+        );
+    }
+    restore_kernel_runtime(kernel_root);
+    // SAFETY: The kernel root and bootstrap interrupt stack are active again.
+    unsafe {
+        asm!("sti", options(nomem, nostack, preserves_flags));
+    }
+
+    // SAFETY: Timer scheduling is inactive before the trampoline resumes this
+    // continuation, so the state can be copied without a race.
+    let final_state = unsafe { addr_of!(FH3_RUNTIME).read() };
+    let counter_a = fh3_counter_value(0);
+    let counter_b = fh3_counter_value(1);
+    PreemptionProbeReport {
+        ring3_processes_started: if final_state.completed {
+            FH3_PROCESS_COUNT
+        } else {
+            0
+        },
+        timer_preemptions: final_state.preemptions,
+        context_switches: final_state.context_switches,
+        cr3_switches: final_state.cr3_switches,
+        register_context_checks: final_state.register_context_checks,
+        process_a_counter: counter_a,
+        process_b_counter: counter_b,
+        full_frame_switching_active: final_state.completed
+            && !final_state.faulted
+            && final_state.context_switches >= 2
+            && final_state.register_context_checks >= 2,
+        private_cr3_switching_active: final_state.completed
+            && final_state.cr3_switches >= 2
+            && active_page_table_root() == kernel_root,
+        per_process_kernel_stacks_active: layout.process_a.kernel_stack.stack_top
+            != layout.process_b.kernel_stack.stack_top,
+    }
+}
+
+fn prepare_initial_user_frame(
+    kernel_stack_top: u64,
+    entry: u64,
+    user_stack_top: u64,
+    r12: u64,
+) -> Option<u64> {
+    let frame_size = u64::try_from(size_of::<InterruptFrame>()).ok()?;
+    let frame_address = kernel_stack_top.checked_sub(frame_size)?;
+    if !frame_address.is_multiple_of(16) {
+        return None;
+    }
+    let pointer = usize::try_from(frame_address).ok()? as *mut InterruptFrame;
+    // SAFETY: The address lies inside an inactive, statically reserved Ring 0
+    // stack and is aligned for the complete interrupt frame.
+    unsafe {
+        pointer.write(InterruptFrame::user(entry, user_stack_top, r12));
+    }
+    Some(frame_address)
+}
+
+fn set_process_kernel_stack(stack_top: u64) {
+    let tss = addr_of_mut!(TSS);
+    // SAFETY: The packed TSS requires an unaligned raw write. The bootstrap CPU
+    // is the sole writer and the new stack remains mapped by the active root.
+    unsafe {
+        addr_of_mut!((*tss).privilege_stack_table)
+            .cast::<u64>()
+            .write_unaligned(stack_top);
+        SANJU_SYSCALL_KERNEL_RSP = stack_top;
+    }
+}
+
+fn restore_kernel_runtime(kernel_root: u64) {
+    // SAFETY: `kernel_root` is the retained SanjuOS root and remains allocated
+    // for the lifetime of the bootstrap CPU.
+    let _ = unsafe { switch_address_space(kernel_root) };
+    let tss = addr_of_mut!(TSS);
+    let interrupt_stack = u64::try_from(user_interrupt_stack_top()).unwrap_or(u64::MAX);
+    // SAFETY: Restore the permanent CPL3 interrupt and syscall stacks before
+    // publishing that no user process owns the CPU.
+    unsafe {
+        addr_of_mut!((*tss).privilege_stack_table)
+            .cast::<u64>()
+            .write_unaligned(interrupt_stack);
+        SANJU_SYSCALL_KERNEL_RSP = u64::try_from(syscall_stack_top()).unwrap_or(u64::MAX);
+    }
+    CURRENT_USER_PID.store(0, Ordering::SeqCst);
+}
+
+fn fh3_counter_value(index: usize) -> u64 {
+    let pointer = match index {
+        0 => addr_of!(SANJU_FH3_COUNTER_A),
+        1 => addr_of!(SANJU_FH3_COUNTER_B),
+        _ => return 0,
+    };
+    // SAFETY: Each counter occupies its own retained page and is written only
+    // by one Ring 3 probe process.
+    unsafe { pointer.read_volatile() }
+}
+
+fn fh3_set_counter(index: usize, value: u64) {
+    let pointer = match index {
+        0 => addr_of_mut!(SANJU_FH3_COUNTER_A),
+        1 => addr_of_mut!(SANJU_FH3_COUNTER_B),
+        _ => return,
+    };
+    // SAFETY: The probe is inactive while counters are reset.
+    unsafe {
+        pointer.write_volatile(value);
+    }
 }
 
 #[unsafe(no_mangle)]
@@ -1026,6 +1627,7 @@ extern "efiapi" fn sanju_syscall_dispatch(
 extern "efiapi" fn sanju_user_fault_dispatch(vector: u64, error_code: u64, fault_address: u64) {
     USER_FAULT_ADDRESS.store(fault_address, Ordering::SeqCst);
     USER_FAULT_ERROR.store(error_code, Ordering::SeqCst);
+    abort_fh3_runtime();
     // SAFETY: The exception trampoline is the sole writer while one user
     // process owns the CPU.
     unsafe {
@@ -1037,6 +1639,21 @@ extern "efiapi" fn sanju_user_fault_dispatch(vector: u64, error_code: u64, fault
     debug_write_label_hex("Vector: ", vector);
     debug_write_label_hex("Error code: ", error_code);
     debug_write_label_hex("Fault address: ", fault_address);
+}
+
+fn abort_fh3_runtime() {
+    // SAFETY: The exception path is serialized on the bootstrap CPU.
+    let mut runtime = unsafe { addr_of!(FH3_RUNTIME).read() };
+    if !runtime.active {
+        return;
+    }
+    runtime.active = false;
+    runtime.faulted = true;
+    restore_kernel_runtime(runtime.kernel_root);
+    // SAFETY: Publish the failed terminal state before resuming the kernel.
+    unsafe {
+        addr_of_mut!(FH3_RUNTIME).write(runtime);
+    }
 }
 
 fn user_pointer_is_valid(pointer: u64, length: usize) -> bool {

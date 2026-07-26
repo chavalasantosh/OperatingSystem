@@ -81,6 +81,11 @@ grep -Fq "Page protection test: passed" build/qemu-debug.log
 grep -Fq "CR3 transition checkpoint: passed" build/qemu-debug.log
 grep -Fq "Interrupts after CR3 switch: passed" build/qemu-debug.log
 grep -Fq "Foundation hardening phase 2: passed" build/qemu-debug.log
+grep -Fq "Private M5 address spaces: 3" build/qemu-debug.log
+grep -Fq "Ring 3 preemption processes: 2" build/qemu-debug.log
+grep -Fq "M5 regression under private CR3: passed" build/qemu-debug.log
+grep -Fq "FH2 paging regression under FH3: passed" build/qemu-debug.log
+grep -Fq "Foundation hardening phase 3: passed" build/qemu-debug.log
 grep -Fq "SanjuOS kernel shell ready." build/qemu-debug.log
 grep -Fq "M5 protected userspace, syscalls, and ELF loader are active." build/qemu-debug.log
 

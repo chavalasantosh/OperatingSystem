@@ -25,7 +25,7 @@
 - Versioned BootInfoV1 and architecture-boundary refactor.
 - Physical ownership map, bitmap allocator with free, and page-table pool.
 
-## Foundation Hardening Phase 2 — major candidate
+## Foundation Hardening Phase 2 — regression baseline
 
 - Frozen x86-64 virtual-memory layout.
 - Complete inherited page-table reservation.
@@ -34,12 +34,21 @@
 - PE-section W^X permissions and real kernel guard holes.
 - M5 and FH1 regression preservation.
 
-## Foundation Hardening Phase 3 — Hardware-Owned Process Runtime
+## Foundation Hardening Phase 3 — implementation complete
 
-- Kernel relocation/high-half policy and private activated process CR3 roots.
-- One hardware-unmapped user and Ring 0 stack pair per process.
+- Private activated process CR3 roots.
+- Hardware-unmapped lower and upper guards for user and Ring 0 stacks.
 - Complete interrupt-frame register context switching.
-- Timer-driven process preemption, blocking/wakeup, and resource reclamation.
+- Timer-driven process preemption and CR3/TSS switching.
+- Blocking, wakeup, and deterministic page-table resource reclamation.
+
+## Next — PCI, Storage, and VFS Foundation
+
+- PCI enumeration and driver matching.
+- Block-device abstraction and virtio-blk/AHCI evaluation.
+- Buffer cache and asynchronous I/O contracts.
+- VFS inode, mount, path, and file-handle model.
+- Read-only persistent filesystem prototype.
 - User VFS handles and executable spawning.
 
 ## Later major epics

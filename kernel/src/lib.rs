@@ -658,6 +658,136 @@ pub fn kernel_main_foundation_hardening_phase2(
     }
 }
 
+/// Runtime evidence for Foundation Hardening Phase 3.
+#[allow(clippy::struct_excessive_bools)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct FoundationHardeningPhase3Report {
+    pub private_process_roots_active: bool,
+    pub private_process_count: usize,
+    pub private_user_pages: usize,
+    pub private_page_table_frames: usize,
+    pub user_guard_holes_active: bool,
+    pub ring0_stacks_active: bool,
+    pub ring3_processes_started: usize,
+    pub full_frame_switching_active: bool,
+    pub timer_preemptions: u64,
+    pub context_switches: u64,
+    pub cr3_switches: u64,
+    pub register_context_checks: u64,
+    pub resource_reclamation_active: bool,
+    pub reclaimed_page_table_frames: usize,
+    pub m5_regression_passed: bool,
+    pub fh1_regression_passed: bool,
+    pub fh2_regression_passed: bool,
+}
+
+impl FoundationHardeningPhase3Report {
+    #[must_use]
+    pub const fn gate_passed(self) -> bool {
+        self.private_process_roots_active
+            && self.private_process_count >= 3
+            && self.private_user_pages > 0
+            && self.private_page_table_frames > 0
+            && self.user_guard_holes_active
+            && self.ring0_stacks_active
+            && self.ring3_processes_started >= 2
+            && self.full_frame_switching_active
+            && self.timer_preemptions >= 2
+            && self.context_switches >= 2
+            && self.cr3_switches >= 2
+            && self.register_context_checks >= 2
+            && self.resource_reclamation_active
+            && self.reclaimed_page_table_frames >= self.private_page_table_frames
+            && self.m5_regression_passed
+            && self.fh1_regression_passed
+            && self.fh2_regression_passed
+    }
+}
+
+/// Prints the Foundation Hardening Phase 3 acceptance report.
+pub fn kernel_main_foundation_hardening_phase3(
+    console: &mut dyn Console,
+    report: FoundationHardeningPhase3Report,
+) {
+    console.write_line("");
+    console.write_line("SanjuOS Foundation Hardening Phase 3");
+    write_state(
+        console,
+        "Private process CR3 roots",
+        report.private_process_roots_active,
+    );
+    console.write_str("Private M5 address spaces: ");
+    console.write_usize(report.private_process_count);
+    console.write_line("");
+    console.write_str("Private user pages: ");
+    console.write_usize(report.private_user_pages);
+    console.write_line("");
+    console.write_str("Private page-table frames: ");
+    console.write_usize(report.private_page_table_frames);
+    console.write_line("");
+    write_state(
+        console,
+        "User and Ring 0 guard holes",
+        report.user_guard_holes_active,
+    );
+    write_state(
+        console,
+        "Per-process Ring 0 stacks",
+        report.ring0_stacks_active,
+    );
+    console.write_str("Ring 3 preemption processes: ");
+    console.write_usize(report.ring3_processes_started);
+    console.write_line("");
+    write_state(
+        console,
+        "Complete interrupt-frame switching",
+        report.full_frame_switching_active,
+    );
+    console.write_str("Timer preemptions observed: ");
+    console.write_u64(report.timer_preemptions);
+    console.write_line("");
+    console.write_str("Hardware context switches: ");
+    console.write_u64(report.context_switches);
+    console.write_line("");
+    console.write_str("Private CR3 switches: ");
+    console.write_u64(report.cr3_switches);
+    console.write_line("");
+    console.write_str("Register-context checks: ");
+    console.write_u64(report.register_context_checks);
+    console.write_line("");
+    console.write_line(if report.resource_reclamation_active {
+        "Process page-table reclamation: passed"
+    } else {
+        "Process page-table reclamation: failed"
+    });
+    console.write_str("Reclaimed process page-table frames: ");
+    console.write_usize(report.reclaimed_page_table_frames);
+    console.write_line("");
+    console.write_line(if report.m5_regression_passed {
+        "M5 regression under private CR3: passed"
+    } else {
+        "M5 regression under private CR3: failed"
+    });
+    console.write_line(if report.fh1_regression_passed {
+        "FH1 allocator regression under FH3: passed"
+    } else {
+        "FH1 allocator regression under FH3: failed"
+    });
+    console.write_line(if report.fh2_regression_passed {
+        "FH2 paging regression under FH3: passed"
+    } else {
+        "FH2 paging regression under FH3: failed"
+    });
+    if report.gate_passed() {
+        console.write_line("Foundation hardening phase 3: passed");
+        console.write_line(
+            "Next gate: PCI discovery, storage drivers, VFS, and persistent filesystems",
+        );
+    } else {
+        console.write_line("Foundation hardening phase 3: failed");
+    }
+}
+
 fn write_hex_u64(console: &mut dyn Console, value: u64) {
     for shift in (0..16).rev() {
         let nibble = u8::try_from((value >> (shift * 4)) & 0x0f).unwrap_or(0);
@@ -681,9 +811,10 @@ fn write_state(console: &mut dyn Console, label: &str, active: bool) {
 #[cfg(test)]
 mod tests {
     use super::{
-        BootInfo, Console, FoundationHardeningPhase2Report, FoundationHardeningReport, M4Report,
-        M5Report, MemoryMapInfo, kernel_main, kernel_main_foundation_hardening,
-        kernel_main_foundation_hardening_phase2, kernel_main_m5,
+        BootInfo, Console, FoundationHardeningPhase2Report, FoundationHardeningPhase3Report,
+        FoundationHardeningReport, M4Report, M5Report, MemoryMapInfo, kernel_main,
+        kernel_main_foundation_hardening, kernel_main_foundation_hardening_phase2,
+        kernel_main_foundation_hardening_phase3, kernel_main_m5,
     };
     use std::string::String;
 
@@ -843,6 +974,47 @@ mod tests {
                 .contains("Inherited firmware page tables: retired\r\n")
         );
         assert!(console.output.contains("Kernel W^X policy: enforced\r\n"));
+    }
+
+    #[test]
+    fn foundation_hardening_phase3_banner_requires_live_context_switches() {
+        let mut console = RecordingConsole::default();
+        let report = FoundationHardeningPhase3Report {
+            private_process_roots_active: true,
+            private_process_count: 3,
+            private_user_pages: 48,
+            private_page_table_frames: 57,
+            user_guard_holes_active: true,
+            ring0_stacks_active: true,
+            ring3_processes_started: 2,
+            full_frame_switching_active: true,
+            timer_preemptions: 3,
+            context_switches: 2,
+            cr3_switches: 2,
+            register_context_checks: 3,
+            resource_reclamation_active: true,
+            reclaimed_page_table_frames: 95,
+            m5_regression_passed: true,
+            fh1_regression_passed: true,
+            fh2_regression_passed: true,
+        };
+        kernel_main_foundation_hardening_phase3(&mut console, report);
+        assert!(report.gate_passed());
+        assert!(
+            console
+                .output
+                .contains("Foundation hardening phase 3: passed\r\n")
+        );
+        assert!(
+            console
+                .output
+                .contains("Complete interrupt-frame switching: active\r\n")
+        );
+        assert!(
+            console
+                .output
+                .contains("Process page-table reclamation: passed\r\n")
+        );
     }
 
     #[test]

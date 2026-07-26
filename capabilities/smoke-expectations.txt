@@ -11,3 +11,8 @@ Fresh SanjuOS PML4: active
 Physical direct map: active
 Kernel W^X policy: enforced
 Hardware guard-hole probe: active
+Private process CR3 roots: active
+Complete interrupt-frame switching: active
+Per-process Ring 0 stacks: active
+User and Ring 0 guard holes: active
+Process page-table reclamation: passed

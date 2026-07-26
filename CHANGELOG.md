@@ -1,5 +1,24 @@
 # Changelog
 
+## Foundation Hardening Phase 3 — 2026-07-26
+
+- Deep-cloned private four-level roots for all M5 processes.
+- Sanitized inherited user permissions and explicit process-owned promotion.
+- Lower and upper hardware guard holes for user and Ring 0 stacks.
+- Per-process TSS `RSP0` and syscall-stack activation.
+- A 160-byte complete x86-64 interrupt-frame ABI.
+- Timer-driven saved-frame, CR3, and Ring 0 stack switching.
+- Two non-cooperative Ring 3 forward-progress probes.
+- Register-sentinel preservation across preemption.
+- Blocking, wakeup, and terminal-process reap operations.
+- Exact private page-table inventories and deterministic reclamation.
+- Capability registry version 3 and FH3 QEMU acceptance gates.
+- M5, FH1, and FH2 regressions preserved as hard gates.
+
+The runtime remains single-core and uses the legacy PIT/PIC. Per-process
+floating-point and SIMD state, SMP, local APIC timers, PCID, copy-on-write,
+demand paging, PCI, and persistent storage remain future work.
+
 ## Foundation Hardening Phase 2 candidate — 2026-07-25
 
 ### Added

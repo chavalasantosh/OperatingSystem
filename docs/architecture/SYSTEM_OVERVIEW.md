@@ -89,5 +89,28 @@ unmapped kernel guard holes run before interrupts and M5 user space are restored
 
 The kernel remains a combined EFI-stub image during this epoch, so the identity
 transition window is intentional rather than an accidental firmware dependency.
-Private process roots, per-task Ring 0 stacks, and full interrupt-context
-preemption remain blocked on the next hardening gate.
+
+## Foundation Hardening Phase 3 process runtime
+
+```text
+SanjuOS kernel CR3
+    -> sanitized private root per process
+       -> explicit Ring 3 image/data/stack pages
+       -> supervisor kernel/direct-map pages
+       -> unmapped user and Ring 0 stack guards
+    -> PIT interrupt
+       -> 15 registers + RIP/CS/RFLAGS/RSP/SS
+       -> round-robin saved-frame selection
+       -> CR3 + TSS RSP0 + syscall-stack switch
+       -> IRETQ into the selected Ring 3 process
+```
+
+Three M5 ELF programs execute sequentially under distinct private roots for
+regression coverage. A separate two-process probe runs non-cooperative Ring 3
+loops and can return to the kernel only through timer-driven complete-frame
+switching. Inactive private hierarchies are reclaimed from an exact frame
+inventory.
+
+The scheduler remains single-core and PIT-driven. SMP, local APIC timers, PCID,
+copy-on-write, demand paging, and a separately linked high-half kernel image are
+future architecture gates.

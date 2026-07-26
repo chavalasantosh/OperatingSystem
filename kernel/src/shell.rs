@@ -126,7 +126,7 @@ fn execute_line(
                 "Commands: help version uptime memory irq tasks ls cat write echo clear userspace",
             );
         }
-        "version" => console.write_line("SanjuOS 0.0.7-prealpha (FH2)"),
+        "version" => console.write_line("SanjuOS 0.0.8-prealpha (FH3)"),
         "uptime" => {
             console.write_str("Timer ticks: ");
             console.write_u64(environment.timer_ticks);

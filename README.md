@@ -6,34 +6,29 @@ SanjuOS is an independent, Rust-first desktop operating-system project. It is
 not a Linux distribution. Development proceeds through emulator-verified kernel
 milestones before any physical-disk work.
 
-## Current checkpoint: Foundation Hardening Phase 2 candidate
+## Current checkpoint: Foundation Hardening Phase 3
 
-The accepted rollback point is `v0.0.6-fh1`. M0 through M5 proved UEFI firmware
-exit, protected kernel execution, hardware interrupts, Ring 3 entry,
-`SYSCALL`/`SYSRET`, ELF64 loading, recoverable user faults, and the interactive
-kernel shell.
+The accepted baseline entering this phase was the Foundation Hardening Phase 2
+candidate. M0 through FH2 proved UEFI ownership transfer, protected kernel
+execution, interrupts, Ring 3 entry, `SYSCALL`/`SYSRET`, ELF64 loading,
+recoverable user faults, physical ownership, and a fresh SanjuOS page-table
+root.
 
-Phase 2 takes page-table sovereignty away from the firmware:
+Phase 3 turns the process runtime into an active hardware boundary:
 
-- a frozen x86-64 virtual-address layout defines user, physical-direct-map,
-  heap, stack, device, and temporary-mapping regions;
-- every inherited page-table frame is discovered and reserved before general
-  allocation begins;
-- a fresh SanjuOS-owned PML4 and all intermediate tables are created only from
-  the dedicated bootstrap pool;
-- a bounded identity transition window and higher-half physical direct map are
-  established explicitly;
-- the loaded PE/COFF image is split to 4 KiB pages and protected according to
-  section permissions, with supervisor write protection and NX enabled;
-- hardware-backed map, translate, protect, and unmap operations are exercised
-  after the CR3 transition;
-- real unmapped kernel guard holes are verified around a mapped stack page;
-- the complete M5 and FH1 QEMU paths remain regression gates.
+- each M5 process owns a deep-cloned four-level page-table root;
+- inherited user permissions are stripped before explicit image and stack
+  promotion;
+- every user and Ring 0 process stack has lower and upper unmapped guard pages;
+- timer interrupts save all general-purpose registers and the complete
+  privilege-transition frame;
+- the scheduler changes the saved frame, CR3, TSS `RSP0`, and syscall stack;
+- two non-cooperative Ring 3 loops prove timer-driven forward progress;
+- every private page-table frame is inventoried and returned after exit;
+- the complete M5, FH1, and FH2 paths remain regression gates.
 
 The authoritative maturity status is generated at
-[`docs/CAPABILITY_MATRIX.md`](docs/CAPABILITY_MATRIX.md). In particular, M5
-private CR3 isolation, per-process user-stack guard holes, and full process
-preemption remain models—not completed hardware guarantees.
+[`docs/CAPABILITY_MATRIX.md`](docs/CAPABILITY_MATRIX.md).
 
 ## Shell commands
 
@@ -68,11 +63,11 @@ docs/               Requirements, architecture, ADRs, testing, security, process
 
 ## Current boundary
 
-Phase 2 owns the kernel page-table root, but the combined EFI-stub kernel still
-retains a bounded identity mapping while a separate kernel image/relocation
-contract is designed. User programs still share the kernel CR3: private process
-address spaces, one Ring 0 stack per task, and full register-context preemption
-remain the next hardening epoch. Storage and graphics stay blocked on that gate.
+FH3 remains single-core and PIT-driven. The combined EFI-stub kernel still
+retains a bounded identity mapping while a separate high-half kernel image is
+designed. Per-process floating-point/SIMD state, SMP, local APIC timers, PCID,
+copy-on-write, and demand paging remain future hardening work. PCI discovery,
+storage drivers, a persistent VFS, and graphics are the next product gate.
 
 ## Safety
 

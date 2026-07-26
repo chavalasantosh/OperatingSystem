@@ -10,3 +10,7 @@
 | R-006 | Dependency compromise enters trusted base | Medium | Critical | dependency ADR and minimal boot dependencies |
 | R-007 | Project owner becomes blocked by low-level complexity | High | High | small demonstrable increments and documented learning path |
 | R-008 | Visual work distracts from kernel reliability | High | Medium | graphics begins only after memory/process foundations |
+| R-009 | Incorrect interrupt-frame layout corrupts a resumed process | Medium | Critical | frozen 160-byte ABI, offset checks, register sentinels, QEMU preemption gate |
+| R-010 | CR3 and TSS stack selection diverge | Medium | Critical | single scheduler transition function and private-root smoke probe |
+| R-011 | Process teardown leaks or double-frees page tables | Medium | High | exact frame inventory, inactive-root guard, reverse reclamation, pool-count check |
+| R-012 | Legacy PIT/PIC results do not generalize to SMP | High | High | explicit single-core boundary; APIC/SMP remains a separate milestone |

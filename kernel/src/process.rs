@@ -79,8 +79,10 @@ impl ProcessControlBlock {
 pub struct ProcessStats {
     pub process_count: usize,
     pub runnable_count: usize,
+    pub blocked_count: usize,
     pub exited_count: usize,
     pub faulted_count: usize,
+    pub reclaimed_count: usize,
     pub context_switches: u64,
     pub preemptions: u64,
 }
@@ -90,6 +92,8 @@ pub enum ProcessError {
     TableFull,
     UnknownPid,
     InvalidState,
+    NotBlocked,
+    NotTerminal,
 }
 
 pub struct ProcessTable {
@@ -99,6 +103,7 @@ pub struct ProcessTable {
     current_index: usize,
     context_switches: u64,
     preemptions: u64,
+    reclaimed_count: usize,
     quantum_ticks: u64,
     ticks_in_quantum: u64,
 }
@@ -113,6 +118,7 @@ impl ProcessTable {
             current_index: MAX_PROCESSES - 1,
             context_switches: 0,
             preemptions: 0,
+            reclaimed_count: 0,
             quantum_ticks,
             ticks_in_quantum: 0,
         }
@@ -219,6 +225,73 @@ impl ProcessTable {
         Ok(())
     }
 
+    /// Removes a runnable process from scheduling until it is explicitly
+    /// woken.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error for an unknown or terminal process.
+    pub fn block(&mut self, pid: u32) -> Result<(), ProcessError> {
+        let process = self.find_mut(pid)?;
+        if !matches!(process.state, ProcessState::Ready | ProcessState::Running) {
+            return Err(ProcessError::InvalidState);
+        }
+        process.state = ProcessState::Blocked;
+        Ok(())
+    }
+
+    /// Returns one blocked process to the ready queue.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ProcessError::NotBlocked`] unless the process is blocked.
+    pub fn wake(&mut self, pid: u32) -> Result<(), ProcessError> {
+        let process = self.find_mut(pid)?;
+        if process.state != ProcessState::Blocked {
+            return Err(ProcessError::NotBlocked);
+        }
+        process.state = ProcessState::Ready;
+        Ok(())
+    }
+
+    /// Stores the complete architecture-neutral register snapshot associated
+    /// with one interrupt-frame switch.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ProcessError::UnknownPid`] for an unknown process.
+    pub fn save_context(&mut self, pid: u32, context: CpuContext) -> Result<(), ProcessError> {
+        self.find_mut(pid)?.context = context;
+        Ok(())
+    }
+
+    /// Reclaims the address-space ownership record of a terminal process.
+    ///
+    /// Hardware page-table frames are released by the architecture layer
+    /// before this model entry is reaped.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ProcessError::NotTerminal`] for a live process.
+    pub fn reap(&mut self, pid: u32) -> Result<AddressSpace, ProcessError> {
+        let index = self
+            .processes
+            .iter()
+            .position(|process| process.pid == pid && process.state != ProcessState::Empty)
+            .ok_or(ProcessError::UnknownPid)?;
+        if !matches!(
+            self.processes[index].state,
+            ProcessState::Exited | ProcessState::Faulted
+        ) {
+            return Err(ProcessError::NotTerminal);
+        }
+        let address_space = self.processes[index].address_space;
+        self.processes[index] = ProcessControlBlock::empty();
+        self.process_count = self.process_count.saturating_sub(1);
+        self.reclaimed_count = self.reclaimed_count.saturating_add(1);
+        Ok(address_space)
+    }
+
     #[must_use]
     pub fn stats(&self) -> ProcessStats {
         ProcessStats {
@@ -230,6 +303,11 @@ impl ProcessTable {
                     matches!(process.state, ProcessState::Ready | ProcessState::Running)
                 })
                 .count(),
+            blocked_count: self
+                .processes
+                .iter()
+                .filter(|process| process.state == ProcessState::Blocked)
+                .count(),
             exited_count: self
                 .processes
                 .iter()
@@ -240,6 +318,7 @@ impl ProcessTable {
                 .iter()
                 .filter(|process| process.state == ProcessState::Faulted)
                 .count(),
+            reclaimed_count: self.reclaimed_count,
             context_switches: self.context_switches,
             preemptions: self.preemptions,
         }
@@ -278,5 +357,27 @@ mod tests {
         table.fault(second, 0xdead).unwrap();
         assert_eq!(table.stats().exited_count, 1);
         assert_eq!(table.stats().faulted_count, 1);
+        assert_eq!(table.reap(first).unwrap().root_frame, 0x1000);
+        assert_eq!(table.reap(second).unwrap().root_frame, 0x1000);
+        assert_eq!(table.stats().reclaimed_count, 2);
+        assert_eq!(table.stats().process_count, 0);
+    }
+
+    #[test]
+    fn blocked_processes_require_an_explicit_wakeup() {
+        let mut table = ProcessTable::new(1);
+        let space = AddressSpace {
+            root_frame: 0x2000,
+            user_start: 0x400000,
+            user_end: 0x800000,
+            isolated: true,
+        };
+        let stack = GuardedStack::new(0x800000, 2).unwrap();
+        let pid = table.spawn(space, stack, 0x401000).unwrap();
+        table.block(pid).unwrap();
+        assert_eq!(table.stats().blocked_count, 1);
+        assert_eq!(table.schedule_next(false), None);
+        table.wake(pid).unwrap();
+        assert_eq!(table.schedule_next(false), Some(pid));
     }
 }

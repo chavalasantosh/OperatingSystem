@@ -29,8 +29,9 @@ use sanju_kernel::scheduler::{Scheduler, TaskKind};
 use sanju_kernel::shell::{Shell, ShellEnvironment};
 use sanju_kernel::startup::{self, StartupStage};
 use sanju_kernel::{
-    BootInfo, Console, FoundationHardeningPhase2Report, FoundationHardeningReport, M5Report,
-    MemoryMapInfo, kernel_main_foundation_hardening, kernel_main_foundation_hardening_phase2,
+    BootInfo, Console, FoundationHardeningPhase2Report, FoundationHardeningPhase3Report,
+    FoundationHardeningReport, M5Report, MemoryMapInfo, kernel_main_foundation_hardening,
+    kernel_main_foundation_hardening_phase2, kernel_main_foundation_hardening_phase3,
     kernel_main_m5,
 };
 
@@ -48,7 +49,7 @@ const EXIT_BOOT_SERVICES_RETRIES: usize = 8;
 const KERNEL_HEAP_SIZE: usize = 1024 * 1024;
 const USER_IMAGE_SIZE: usize = 16 * 1024;
 const USER_STACK_SIZE: usize = 64 * 1024;
-const USER_STACK_TOTAL_SIZE: usize = USER_STACK_SIZE + 4096;
+const USER_STACK_TOTAL_SIZE: usize = USER_STACK_SIZE + 2 * 4096;
 
 const fn efi_error_code(code: usize) -> usize {
     (1usize << (usize::BITS - 1)) | code
@@ -665,15 +666,12 @@ extern "efiapi" fn sanju_m5_kernel_entry() -> ! {
     // SAFETY: Firmware has exited, interrupts remain disabled, the inherited
     // hierarchy and retained boot metadata are readable, and the dedicated
     // page-table pool is exclusively owned by this bootstrap path.
-    let Ok((mut hardware_page_tables, mut hardware_paging_report)) =
-        (unsafe { cpu::take_page_table_ownership(&mut page_table_bootstrap_pool, &boot_info) })
-    else {
-        boot_failure(
-            &mut console,
-            "FH2-MEM-CR3-001",
-            "SanjuOS page-table ownership transition failed",
-        );
-    };
+    let (mut hardware_page_tables, mut hardware_paging_report) =
+        match unsafe { cpu::take_page_table_ownership(&mut page_table_bootstrap_pool, &boot_info) }
+        {
+            Ok(result) => result,
+            Err(error) => boot_failure(&mut console, "FH2-MEM-CR3-001", paging_error_reason(error)),
+        };
 
     let mapping_probe_page = cpu::kernel_heap_probe_page();
     let mapping_probe_flags = PageFlags::WRITABLE
@@ -865,47 +863,164 @@ extern "efiapi" fn sanju_m5_kernel_entry() -> ! {
         boot_failure(&mut console, "M5-STK-003", "fault guarded stack rejected");
     };
 
-    let Some(init_root) = frame_allocator.allocate_frame() else {
-        boot_failure(&mut console, "M5-PROC-001", "no root frame for init");
-    };
-    let Some(hello_root) = frame_allocator.allocate_frame() else {
-        boot_failure(&mut console, "M5-PROC-002", "no root frame for hello");
-    };
-    let Some(fault_root) = frame_allocator.allocate_frame() else {
-        boot_failure(&mut console, "M5-PROC-003", "no root frame for fault-test");
-    };
-
     let init_image_start = u64::try_from(init_image_pointer.addr()).unwrap_or(u64::MAX);
     let hello_image_start = u64::try_from(hello_image_pointer.addr()).unwrap_or(u64::MAX);
     let fault_image_start = u64::try_from(fault_image_pointer.addr()).unwrap_or(u64::MAX);
-    let init_space = AddressSpace {
-        root_frame: init_root.start_address(),
-        user_start: init_image_start,
-        user_end: init_image_start
-            .saturating_add(u64::try_from(init_loaded.image_size).unwrap_or(0)),
-        isolated: true,
-    };
-    let hello_space = AddressSpace {
-        root_frame: hello_root.start_address(),
-        user_start: hello_image_start,
-        user_end: hello_image_start
-            .saturating_add(u64::try_from(hello_loaded.image_size).unwrap_or(0)),
-        isolated: true,
-    };
-    let fault_space = AddressSpace {
-        root_frame: fault_root.start_address(),
-        user_start: fault_image_start,
-        user_end: fault_image_start
-            .saturating_add(u64::try_from(fault_loaded.image_size).unwrap_or(0)),
-        isolated: true,
-    };
-
     let init_entry =
         init_image_start.saturating_add(u64::try_from(init_loaded.entry_offset).unwrap_or(0));
     let hello_entry =
         hello_image_start.saturating_add(u64::try_from(hello_loaded.entry_offset).unwrap_or(0));
     let fault_entry =
         fault_image_start.saturating_add(u64::try_from(fault_loaded.entry_offset).unwrap_or(0));
+
+    let Some(init_kernel_stack) = cpu::process_kernel_stack_layout(0) else {
+        boot_failure(&mut console, "FH3-STK-001", "init Ring 0 stack unavailable");
+    };
+    let Some(hello_kernel_stack) = cpu::process_kernel_stack_layout(1) else {
+        boot_failure(
+            &mut console,
+            "FH3-STK-002",
+            "hello Ring 0 stack unavailable",
+        );
+    };
+    let Some(fault_kernel_stack) = cpu::process_kernel_stack_layout(2) else {
+        boot_failure(
+            &mut console,
+            "FH3-STK-003",
+            "fault-test Ring 0 stack unavailable",
+        );
+    };
+
+    let init_mappings = [
+        cpu::UserMapping {
+            start: init_image_start,
+            length: init_loaded.image_size,
+            executable: true,
+        },
+        cpu::UserMapping {
+            start: init_stack.stack_start.start_address(),
+            length: USER_STACK_SIZE,
+            executable: false,
+        },
+    ];
+    let hello_mappings = [
+        cpu::UserMapping {
+            start: hello_image_start,
+            length: hello_loaded.image_size,
+            executable: true,
+        },
+        cpu::UserMapping {
+            start: hello_stack.stack_start.start_address(),
+            length: USER_STACK_SIZE,
+            executable: false,
+        },
+    ];
+    let fault_mappings = [
+        cpu::UserMapping {
+            start: fault_image_start,
+            length: fault_loaded.image_size,
+            executable: true,
+        },
+        cpu::UserMapping {
+            start: fault_stack.stack_start.start_address(),
+            length: USER_STACK_SIZE,
+            executable: false,
+        },
+    ];
+    let init_guards = [
+        init_stack.guard_page,
+        VirtualPage::containing(init_stack.stack_top),
+        VirtualPage::containing(init_kernel_stack.lower_guard),
+        VirtualPage::containing(init_kernel_stack.upper_guard),
+    ];
+    let hello_guards = [
+        hello_stack.guard_page,
+        VirtualPage::containing(hello_stack.stack_top),
+        VirtualPage::containing(hello_kernel_stack.lower_guard),
+        VirtualPage::containing(hello_kernel_stack.upper_guard),
+    ];
+    let fault_guards = [
+        fault_stack.guard_page,
+        VirtualPage::containing(fault_stack.stack_top),
+        VirtualPage::containing(fault_kernel_stack.lower_guard),
+        VirtualPage::containing(fault_kernel_stack.upper_guard),
+    ];
+
+    let process_pool_remaining_before = hardware_page_tables.pool_remaining();
+    let Ok(init_private_space) =
+        hardware_page_tables.create_private_address_space(&init_mappings, &init_guards)
+    else {
+        boot_failure(
+            &mut console,
+            "FH3-AS-001",
+            "init private address-space creation failed",
+        );
+    };
+    let Ok(hello_private_space) =
+        hardware_page_tables.create_private_address_space(&hello_mappings, &hello_guards)
+    else {
+        boot_failure(
+            &mut console,
+            "FH3-AS-002",
+            "hello private address-space creation failed",
+        );
+    };
+    let Ok(fault_private_space) =
+        hardware_page_tables.create_private_address_space(&fault_mappings, &fault_guards)
+    else {
+        boot_failure(
+            &mut console,
+            "FH3-AS-003",
+            "fault-test private address-space creation failed",
+        );
+    };
+
+    let init_root = init_private_space.root_address();
+    let hello_root = hello_private_space.root_address();
+    let fault_root = fault_private_space.root_address();
+    let private_address_spaces_verified = init_private_space.user_accessible(init_image_start)
+        && init_private_space.user_accessible(init_stack.stack_start.start_address())
+        && !init_private_space.user_accessible(hello_image_start)
+        && hello_private_space.user_accessible(hello_image_start)
+        && hello_private_space.user_accessible(hello_stack.stack_start.start_address())
+        && !hello_private_space.user_accessible(fault_image_start)
+        && fault_private_space.user_accessible(fault_image_start)
+        && fault_private_space.user_accessible(fault_stack.stack_start.start_address())
+        && !fault_private_space.user_accessible(init_image_start);
+    let private_guard_holes_verified = init_private_space.guard_holes() == init_guards.len()
+        && hello_private_space.guard_holes() == hello_guards.len()
+        && fault_private_space.guard_holes() == fault_guards.len()
+        && init_private_space
+            .translates(init_stack.guard_page.start_address())
+            .is_none()
+        && hello_private_space
+            .translates(hello_stack.guard_page.start_address())
+            .is_none()
+        && fault_private_space
+            .translates(fault_stack.guard_page.start_address())
+            .is_none();
+
+    let init_space = AddressSpace {
+        root_frame: init_root,
+        user_start: init_image_start,
+        user_end: init_image_start
+            .saturating_add(u64::try_from(init_loaded.image_size).unwrap_or(0)),
+        isolated: true,
+    };
+    let hello_space = AddressSpace {
+        root_frame: hello_root,
+        user_start: hello_image_start,
+        user_end: hello_image_start
+            .saturating_add(u64::try_from(hello_loaded.image_size).unwrap_or(0)),
+        isolated: true,
+    };
+    let fault_space = AddressSpace {
+        root_frame: fault_root,
+        user_start: fault_image_start,
+        user_end: fault_image_start
+            .saturating_add(u64::try_from(fault_loaded.image_size).unwrap_or(0)),
+        isolated: true,
+    };
 
     let mut processes = ProcessTable::new(2);
     let Ok(init_pid) = processes.spawn(init_space, init_stack, init_entry) else {
@@ -934,6 +1049,8 @@ extern "efiapi" fn sanju_m5_kernel_entry() -> ! {
             init_stack.stack_start.start_address(),
             USER_STACK_SIZE,
             init_pid,
+            init_root,
+            init_kernel_stack.stack_top,
         )
     };
     if init_result.exited {
@@ -951,6 +1068,8 @@ extern "efiapi" fn sanju_m5_kernel_entry() -> ! {
             hello_stack.stack_start.start_address(),
             USER_STACK_SIZE,
             hello_pid,
+            hello_root,
+            hello_kernel_stack.stack_top,
         )
     };
     if hello_result.exited {
@@ -968,6 +1087,8 @@ extern "efiapi" fn sanju_m5_kernel_entry() -> ! {
             fault_stack.stack_start.start_address(),
             USER_STACK_SIZE,
             fault_pid,
+            fault_root,
+            fault_kernel_stack.stack_top,
         )
     };
     if fault_result.exited {
@@ -976,6 +1097,157 @@ extern "efiapi" fn sanju_m5_kernel_entry() -> ! {
         let _ = processes.fault(fault_pid, fault_result.fault_address);
     }
     let process_stats = processes.stats();
+    let m5_private_table_frames = init_private_space
+        .table_frame_count()
+        .saturating_add(hello_private_space.table_frame_count())
+        .saturating_add(fault_private_space.table_frame_count());
+    let m5_private_user_pages = init_private_space
+        .user_pages()
+        .saturating_add(hello_private_space.user_pages())
+        .saturating_add(fault_private_space.user_pages());
+    let Ok(init_reclaimed) = hardware_page_tables.reclaim_private_address_space(init_private_space)
+    else {
+        boot_failure(
+            &mut console,
+            "FH3-RECLAIM-001",
+            "init page-table reclamation failed",
+        );
+    };
+    let Ok(hello_reclaimed) =
+        hardware_page_tables.reclaim_private_address_space(hello_private_space)
+    else {
+        boot_failure(
+            &mut console,
+            "FH3-RECLAIM-002",
+            "hello page-table reclamation failed",
+        );
+    };
+    let Ok(fault_reclaimed) =
+        hardware_page_tables.reclaim_private_address_space(fault_private_space)
+    else {
+        boot_failure(
+            &mut console,
+            "FH3-RECLAIM-003",
+            "fault-test page-table reclamation failed",
+        );
+    };
+
+    let Some(preemption_layout) = cpu::preemption_probe_layout() else {
+        boot_failure(
+            &mut console,
+            "FH3-SCHED-001",
+            "preemption probe layout unavailable",
+        );
+    };
+    let probe_a_mappings = [
+        cpu::UserMapping {
+            start: preemption_layout.process_a.code_page,
+            length: usize::try_from(PAGE_SIZE).unwrap_or(4096),
+            executable: true,
+        },
+        cpu::UserMapping {
+            start: preemption_layout.process_a.counter_page,
+            length: usize::try_from(PAGE_SIZE).unwrap_or(4096),
+            executable: false,
+        },
+        cpu::UserMapping {
+            start: preemption_layout.process_a.user_stack.stack_start,
+            length: preemption_layout.process_a.user_stack.stack_size,
+            executable: false,
+        },
+    ];
+    let probe_b_mappings = [
+        cpu::UserMapping {
+            start: preemption_layout.process_b.code_page,
+            length: usize::try_from(PAGE_SIZE).unwrap_or(4096),
+            executable: true,
+        },
+        cpu::UserMapping {
+            start: preemption_layout.process_b.counter_page,
+            length: usize::try_from(PAGE_SIZE).unwrap_or(4096),
+            executable: false,
+        },
+        cpu::UserMapping {
+            start: preemption_layout.process_b.user_stack.stack_start,
+            length: preemption_layout.process_b.user_stack.stack_size,
+            executable: false,
+        },
+    ];
+    let probe_a_guards = [
+        VirtualPage::containing(preemption_layout.process_a.user_stack.lower_guard),
+        VirtualPage::containing(preemption_layout.process_a.user_stack.upper_guard),
+        VirtualPage::containing(preemption_layout.process_a.kernel_stack.lower_guard),
+        VirtualPage::containing(preemption_layout.process_a.kernel_stack.upper_guard),
+    ];
+    let probe_b_guards = [
+        VirtualPage::containing(preemption_layout.process_b.user_stack.lower_guard),
+        VirtualPage::containing(preemption_layout.process_b.user_stack.upper_guard),
+        VirtualPage::containing(preemption_layout.process_b.kernel_stack.lower_guard),
+        VirtualPage::containing(preemption_layout.process_b.kernel_stack.upper_guard),
+    ];
+    let Ok(probe_a_space) =
+        hardware_page_tables.create_private_address_space(&probe_a_mappings, &probe_a_guards)
+    else {
+        boot_failure(
+            &mut console,
+            "FH3-SCHED-002",
+            "process A probe address space failed",
+        );
+    };
+    let Ok(probe_b_space) =
+        hardware_page_tables.create_private_address_space(&probe_b_mappings, &probe_b_guards)
+    else {
+        boot_failure(
+            &mut console,
+            "FH3-SCHED-003",
+            "process B probe address space failed",
+        );
+    };
+    let probe_roots_isolated = probe_a_space.root_address() != probe_b_space.root_address()
+        && probe_a_space.user_accessible(preemption_layout.process_a.counter_page)
+        && !probe_a_space.user_accessible(preemption_layout.process_b.counter_page)
+        && probe_b_space.user_accessible(preemption_layout.process_b.counter_page)
+        && !probe_b_space.user_accessible(preemption_layout.process_a.counter_page);
+    let probe_guard_holes_active = probe_a_space.guard_holes() == probe_a_guards.len()
+        && probe_b_space.guard_holes() == probe_b_guards.len()
+        && probe_a_space
+            .translates(preemption_layout.process_a.kernel_stack.lower_guard)
+            .is_none()
+        && probe_b_space
+            .translates(preemption_layout.process_b.kernel_stack.lower_guard)
+            .is_none();
+    let probe_a_root = probe_a_space.root_address();
+    let probe_b_root = probe_b_space.root_address();
+    // SAFETY: Both roots retain the complete kernel mapping and contain only
+    // their explicitly promoted probe code, counter, and user-stack pages.
+    let preemption_report = unsafe { cpu::run_preemption_probe(probe_a_root, probe_b_root) };
+    let probe_private_table_frames = probe_a_space
+        .table_frame_count()
+        .saturating_add(probe_b_space.table_frame_count());
+    let Ok(probe_a_reclaimed) = hardware_page_tables.reclaim_private_address_space(probe_a_space)
+    else {
+        boot_failure(
+            &mut console,
+            "FH3-RECLAIM-004",
+            "process A probe reclamation failed",
+        );
+    };
+    let Ok(probe_b_reclaimed) = hardware_page_tables.reclaim_private_address_space(probe_b_space)
+    else {
+        boot_failure(
+            &mut console,
+            "FH3-RECLAIM-005",
+            "process B probe reclamation failed",
+        );
+    };
+    let private_table_frames_reclaimed = init_reclaimed
+        .saturating_add(hello_reclaimed)
+        .saturating_add(fault_reclaimed)
+        .saturating_add(probe_a_reclaimed)
+        .saturating_add(probe_b_reclaimed);
+    let process_resources_reclaimed = private_table_frames_reclaimed
+        == m5_private_table_frames.saturating_add(probe_private_table_frames)
+        && hardware_page_tables.pool_remaining() == process_pool_remaining_before;
 
     let mut scheduler = Scheduler::new();
     let scheduler_ready = scheduler.add_task(TaskKind::Idle).is_some()
@@ -1021,6 +1293,7 @@ extern "efiapi" fn sanju_m5_kernel_entry() -> ! {
         page_flags_active,
         boot_memory_reclaim_active: reclaimable_frames > 0,
         guard_pages_active: hardware_paging_report.guard_pages_active
+            && private_guard_holes_verified
             && init_stack.stack_pages > 0
             && hello_stack.stack_pages > 0
             && fault_stack.stack_pages > 0,
@@ -1031,8 +1304,8 @@ extern "efiapi" fn sanju_m5_kernel_entry() -> ! {
         page_fault_diagnostics_active: user_runtime.page_fault_diagnostics_active,
         user_gdt_active: user_runtime.user_gdt_active,
         ring3_execution_active: init_result.exited && hello_result.exited && fault_result.faulted,
-        user_address_space_isolation_active: roots_are_distinct,
-        user_stacks_active: true,
+        user_address_space_isolation_active: roots_are_distinct && private_address_spaces_verified,
+        user_stacks_active: private_guard_holes_verified,
         process_control_blocks_active: process_stats.process_count == 3,
         context_switching_active: process_stats.context_switches > 0 && scheduler_ready,
         preemptive_scheduling_active: process_stats.preemptions > 0
@@ -1065,7 +1338,7 @@ extern "efiapi" fn sanju_m5_kernel_entry() -> ! {
     let foundation_report = FoundationHardeningReport {
         toolchain_pinned: true,
         capability_registry_synchronized: sanju_kernel::generated::capabilities::REGISTRY_VERSION
-            == 2,
+            == 3,
         architecture_separation_verified: true,
         boot_info_version: boot_info.version,
         ownership_map_active: !ownership_map.is_empty(),
@@ -1121,6 +1394,40 @@ extern "efiapi" fn sanju_m5_kernel_entry() -> ! {
             &mut console,
             "FH2-GATE-001",
             "foundation hardening phase 2 acceptance gate failed",
+        );
+    }
+
+    let phase3_report = FoundationHardeningPhase3Report {
+        private_process_roots_active: roots_are_distinct
+            && private_address_spaces_verified
+            && probe_roots_isolated
+            && preemption_report.private_cr3_switching_active,
+        private_process_count: process_stats.process_count,
+        private_user_pages: m5_private_user_pages,
+        private_page_table_frames: m5_private_table_frames
+            .saturating_add(probe_private_table_frames),
+        user_guard_holes_active: private_guard_holes_verified && probe_guard_holes_active,
+        ring0_stacks_active: preemption_report.per_process_kernel_stacks_active
+            && init_kernel_stack.stack_top != hello_kernel_stack.stack_top
+            && hello_kernel_stack.stack_top != fault_kernel_stack.stack_top,
+        ring3_processes_started: preemption_report.ring3_processes_started,
+        full_frame_switching_active: preemption_report.full_frame_switching_active,
+        timer_preemptions: preemption_report.timer_preemptions,
+        context_switches: preemption_report.context_switches,
+        cr3_switches: preemption_report.cr3_switches,
+        register_context_checks: preemption_report.register_context_checks,
+        resource_reclamation_active: process_resources_reclaimed,
+        reclaimed_page_table_frames: private_table_frames_reclaimed,
+        m5_regression_passed: report.gate_passed(),
+        fh1_regression_passed: foundation_report.gate_passed(),
+        fh2_regression_passed: phase2_report.gate_passed(),
+    };
+    kernel_main_foundation_hardening_phase3(&mut console, phase3_report);
+    if !phase3_report.gate_passed() {
+        boot_failure(
+            &mut console,
+            "FH3-GATE-001",
+            "foundation hardening phase 3 acceptance gate failed",
         );
     }
 
@@ -1188,6 +1495,25 @@ fn boot_failure(console: &mut dyn Console, code: &str, message: &str) -> ! {
 
     #[cfg(not(feature = "qemu-test"))]
     cpu::halt_forever()
+}
+
+const fn paging_error_reason(error: PagingError) -> &'static str {
+    match error {
+        PagingError::Unaligned => "page-table ownership: unaligned address",
+        PagingError::NonCanonicalAddress => "page-table ownership: non-canonical address",
+        PagingError::AddressOverflow => "page-table ownership: address overflow",
+        PagingError::AlreadyMapped => "page-table ownership: duplicate mapping",
+        PagingError::NotMapped => "page-table ownership: required mapping absent",
+        PagingError::MappingTableFull => "page-table ownership: mapping inventory full",
+        PagingError::WriteExecuteViolation => "page-table ownership: W^X violation",
+        PagingError::InvalidUserAddress => "page-table ownership: invalid user address",
+        PagingError::BootstrapPoolExhausted => "page-table ownership: bootstrap pool exhausted",
+        PagingError::HugePageConflict => "page-table ownership: huge-page conflict",
+        PagingError::CorruptHierarchy => "page-table ownership: corrupt hierarchy",
+        PagingError::UnsupportedImage => "page-table ownership: unsupported PE image",
+        PagingError::PermissionConflict => "page-table ownership: PE permission conflict",
+        PagingError::UnsupportedCpuFeature => "page-table ownership: unsupported CPU feature",
+    }
 }
 
 trait ClearScreen {

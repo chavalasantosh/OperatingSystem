@@ -1,4 +1,4 @@
-registry_version = 2
+registry_version = 3
 
 [[capability]]
 id = "SYS-TC-001"
@@ -127,18 +127,47 @@ boot_label = "Ring 3 execution"
 [[capability]]
 id = "PROC-AS-001"
 name = "Private process CR3 isolation"
-status = "software_model"
-milestone = "m5"
-evidence = ["kernel/src/process.rs"]
-boot_label = "User address-space model"
+status = "hardware_active"
+milestone = "foundation-hardening-3"
+evidence = ["boot/uefi/src/arch/x86_64/paging.rs", "boot/uefi/src/main.rs", "scripts/smoke-test.sh"]
+boot_label = "Private process CR3 roots"
+required_boot_line = "Private process CR3 roots: active"
 
 [[capability]]
 id = "SCHED-PRE-001"
-name = "Full register-context preemptive scheduling"
-status = "software_model"
-milestone = "m5"
-evidence = ["kernel/src/process.rs", "kernel/src/scheduler.rs"]
-boot_label = "Timer-driven scheduling model"
+name = "Full integer register-context preemptive scheduling"
+status = "hardware_active"
+milestone = "foundation-hardening-3"
+evidence = ["boot/uefi/src/arch/x86_64/mod.rs", "boot/uefi/src/main.rs", "scripts/smoke-test.sh"]
+boot_label = "Complete interrupt-frame switching"
+required_boot_line = "Complete interrupt-frame switching: active"
+
+[[capability]]
+id = "PROC-KSTK-001"
+name = "Per-process guarded Ring 0 stacks"
+status = "hardware_active"
+milestone = "foundation-hardening-3"
+evidence = ["boot/uefi/src/arch/x86_64/mod.rs", "boot/uefi/src/arch/x86_64/paging.rs"]
+boot_label = "Per-process Ring 0 stacks"
+required_boot_line = "Per-process Ring 0 stacks: active"
+
+[[capability]]
+id = "PROC-GUARD-001"
+name = "Private user and Ring 0 guard holes"
+status = "hardware_active"
+milestone = "foundation-hardening-3"
+evidence = ["boot/uefi/src/arch/x86_64/paging.rs", "boot/uefi/src/main.rs"]
+boot_label = "User and Ring 0 guard holes"
+required_boot_line = "User and Ring 0 guard holes: active"
+
+[[capability]]
+id = "PROC-RECLAIM-001"
+name = "Process page-table resource reclamation"
+status = "verified"
+milestone = "foundation-hardening-3"
+evidence = ["boot/uefi/src/arch/x86_64/paging.rs", "boot/uefi/src/main.rs"]
+boot_label = "Process page-table reclamation"
+required_boot_line = "Process page-table reclamation: passed"
 
 [[capability]]
 id = "SYS-SYSCALL-001"

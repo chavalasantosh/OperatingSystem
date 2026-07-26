@@ -1,6 +1,6 @@
 # SanjuOS Capability Matrix
 
-Registry version: **2**
+Registry version: **3**
 
 This file is generated from `capabilities/capabilities.toml`. Do not edit it manually.
 
@@ -20,8 +20,11 @@ This file is generated from `capabilities/capabilities.toml`. Do not edit it man
 | `MEM-GUARD-001` | Hardware-unmapped guard-hole probe | `acceptance_prototype` | `foundation-hardening-2` | `kernel/src/paging.rs`<br>`boot/uefi/src/arch/x86_64/paging.rs` |
 | `MEM-RECLAIM-001` | Boot-service memory reclaim | `software_model` | `m5` | `kernel/src/memory.rs` |
 | `PROC-R3-001` | Ring 3 privilege transition | `hardware_active` | `m5` | `boot/uefi/src/arch/x86_64/mod.rs`<br>`user/programs/src/` |
-| `PROC-AS-001` | Private process CR3 isolation | `software_model` | `m5` | `kernel/src/process.rs` |
-| `SCHED-PRE-001` | Full register-context preemptive scheduling | `software_model` | `m5` | `kernel/src/process.rs`<br>`kernel/src/scheduler.rs` |
+| `PROC-AS-001` | Private process CR3 isolation | `hardware_active` | `foundation-hardening-3` | `boot/uefi/src/arch/x86_64/paging.rs`<br>`boot/uefi/src/main.rs`<br>`scripts/smoke-test.sh` |
+| `SCHED-PRE-001` | Full integer register-context preemptive scheduling | `hardware_active` | `foundation-hardening-3` | `boot/uefi/src/arch/x86_64/mod.rs`<br>`boot/uefi/src/main.rs`<br>`scripts/smoke-test.sh` |
+| `PROC-KSTK-001` | Per-process guarded Ring 0 stacks | `hardware_active` | `foundation-hardening-3` | `boot/uefi/src/arch/x86_64/mod.rs`<br>`boot/uefi/src/arch/x86_64/paging.rs` |
+| `PROC-GUARD-001` | Private user and Ring 0 guard holes | `hardware_active` | `foundation-hardening-3` | `boot/uefi/src/arch/x86_64/paging.rs`<br>`boot/uefi/src/main.rs` |
+| `PROC-RECLAIM-001` | Process page-table resource reclamation | `verified` | `foundation-hardening-3` | `boot/uefi/src/arch/x86_64/paging.rs`<br>`boot/uefi/src/main.rs` |
 | `SYS-SYSCALL-001` | x86-64 syscall entry and return | `hardware_active` | `m5` | `boot/uefi/src/arch/x86_64/mod.rs`<br>`kernel/src/syscall.rs` |
 | `EXEC-ELF-001` | ELF64 position-independent loader | `hardware_active` | `m5` | `kernel/src/elf.rs`<br>`user/programs/bin/` |
 | `GFX-BOOT-001` | Graphical framebuffer startup splash | `planned` | `m6` | `assets/branding/sanjuos-logo.png` |

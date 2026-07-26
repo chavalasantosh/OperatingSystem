@@ -242,6 +242,31 @@ class IdtEntry(ctypes.Structure):
     ]
 
 
+class InterruptFrame(ctypes.Structure):
+    _fields_ = [
+        ("r15", ctypes.c_uint64),
+        ("r14", ctypes.c_uint64),
+        ("r13", ctypes.c_uint64),
+        ("r12", ctypes.c_uint64),
+        ("r11", ctypes.c_uint64),
+        ("r10", ctypes.c_uint64),
+        ("r9", ctypes.c_uint64),
+        ("r8", ctypes.c_uint64),
+        ("rdi", ctypes.c_uint64),
+        ("rsi", ctypes.c_uint64),
+        ("rbp", ctypes.c_uint64),
+        ("rbx", ctypes.c_uint64),
+        ("rdx", ctypes.c_uint64),
+        ("rcx", ctypes.c_uint64),
+        ("rax", ctypes.c_uint64),
+        ("rip", ctypes.c_uint64),
+        ("cs", ctypes.c_uint64),
+        ("rflags", ctypes.c_uint64),
+        ("rsp", ctypes.c_uint64),
+        ("ss", ctypes.c_uint64),
+    ]
+
+
 def validate_source_manifest() -> None:
     expected: dict[Path, str] = {}
     for line in SOURCE_MANIFEST.read_text(encoding="utf-8").splitlines():
@@ -339,6 +364,10 @@ def main() -> int:
     require(boot, "KernelHeap::new", BOOT)
     require(boot, "load_position_independent", BOOT)
     require(boot, "cpu::run_user_process", BOOT)
+    require(boot, "create_private_address_space", BOOT)
+    require(boot, "cpu::run_preemption_probe", BOOT)
+    require(boot, "reclaim_private_address_space", BOOT)
+    require(boot, "FoundationHardeningPhase3Report", BOOT)
     if "core::arch" in boot or "asm!(" in boot or "global_asm!(" in boot:
         raise AssertionError(f"{BOOT}: architecture-specific assembly leaked into main.rs")
     require(cpu, 'asm!("int3"', CPU)
@@ -356,7 +385,14 @@ def main() -> int:
     require(cpu, "sysretq", CPU)
     require(cpu, "iretq", CPU)
     require(cpu, "mark_user_range", CPU)
+    require(cpu, "struct InterruptFrame", CPU)
+    require(cpu, "fh3_schedule_from_timer", CPU)
+    require(cpu, "run_preemption_probe", CPU)
+    require(cpu, "set_process_kernel_stack", CPU)
+    require(cpu, "switch_address_space", CPU)
+    require(cpu, "SANJU_FH3_COUNTER_A", CPU)
     require(hardware_paging, "pub struct HardwarePageTable", HARDWARE_PAGING)
+    require(hardware_paging, "pub struct PrivateAddressSpace", HARDWARE_PAGING)
     require(hardware_paging, "take_page_table_ownership", HARDWARE_PAGING)
     require(hardware_paging, "reserve_inherited_page_tables", HARDWARE_PAGING)
     require(hardware_paging, "map_huge_2m", HARDWARE_PAGING)
@@ -368,6 +404,11 @@ def main() -> int:
     require(hardware_paging, "enable_execute_disable", HARDWARE_PAGING)
     require(hardware_paging, "enable_kernel_write_protect", HARDWARE_PAGING)
     require(hardware_paging, "switch_cr3_and_flush_global", HARDWARE_PAGING)
+    require(hardware_paging, "create_private_address_space", HARDWARE_PAGING)
+    require(hardware_paging, "clone_private_table", HARDWARE_PAGING)
+    require(hardware_paging, "reclaim_private_address_space", HARDWARE_PAGING)
+    require(hardware_paging, "mark_user_range_in_root", HARDWARE_PAGING)
+    require(hardware_paging, "clear_leaf_in_root", HARDWARE_PAGING)
     require(hardware_paging, "update_direct_alias_permissions", HARDWARE_PAGING)
     require(memory, "pub struct FrameAllocator", MEMORY)
     require(memory, "pub struct FrameBitmap", MEMORY)
@@ -394,6 +435,9 @@ def main() -> int:
     require(heap, "pub struct KernelHeap", HEAP)
     require(process, "pub struct ProcessControlBlock", PROCESS)
     require(process, "pub struct ProcessTable", PROCESS)
+    require(process, "pub fn block", PROCESS)
+    require(process, "pub fn wake", PROCESS)
+    require(process, "pub fn reap", PROCESS)
     require(syscall, "pub struct SyscallDispatcher", SYSCALL)
     for syscall_name in ("Write", "Read", "Exit", "Yield", "GetPid", "Open", "Close", "Spawn"):
         require(syscall, syscall_name, SYSCALL)
@@ -422,7 +466,9 @@ def main() -> int:
     require(workspace, 'rust-version = "1.97.0"', WORKSPACE)
     require(kernel, "pub struct M5Report", KERNEL)
     require(kernel, "pub struct FoundationHardeningReport", KERNEL)
+    require(kernel, "pub struct FoundationHardeningPhase3Report", KERNEL)
     require(kernel, "Foundation hardening phase 1: passed", KERNEL)
+    require(kernel, "Foundation hardening phase 3: passed", KERNEL)
     require(kernel, "Ring 3 execution", KERNEL)
     require(kernel, "M5 protected user-space gate: passed", KERNEL)
     require(
@@ -456,6 +502,10 @@ def main() -> int:
     assert ctypes.sizeof(TaskStateSegment) == 104
     assert TaskStateSegment.interrupt_stack_table.offset == 36
     assert ctypes.sizeof(IdtEntry) == 16
+    assert ctypes.sizeof(InterruptFrame) == 160
+    assert InterruptFrame.rip.offset == 120
+    assert InterruptFrame.cs.offset == 128
+    assert InterruptFrame.rsp.offset == 144
 
     exit_boot_services_offset = 24 + (26 * 8)
     assert exit_boot_services_offset == 232
@@ -482,13 +532,14 @@ def main() -> int:
             )
     validate_source_manifest()
 
-    print("SanjuOS Foundation Hardening Phase 2 source checks passed.")
+    print("SanjuOS Foundation Hardening Phase 3 source checks passed.")
     print("UEFI memory descriptor base size: 40 bytes")
     print("UEFI GOP mode-information size: 36 bytes")
     print("UEFI GOP mode size: 40 bytes")
     print("BootInfo v1 ABI size: 664 bytes")
     print("x86-64 TSS size: 104 bytes")
     print("x86-64 IDT entry size: 16 bytes")
+    print("x86-64 complete interrupt-frame size: 160 bytes")
     print("ExitBootServices ABI offset: 232 bytes")
     return 0
 
