@@ -8,6 +8,8 @@ writes.
 
 ## M6A — PCI discovery
 
+Status: accepted as `v0.0.9-m6a`.
+
 - PCI configuration-mechanism #1 presence probe.
 - Bounded bus/device/function inventory.
 - Multifunction and PCI bridge traversal.
@@ -25,12 +27,16 @@ Exit criteria:
 
 ## M6B — block transport
 
-- block-device trait and sector geometry contract;
-- PCI BAR and virtio capability parsing;
-- dedicated DMA-safe request, descriptor, available, and used rings;
-- polling virtio-blk initialization;
-- bounded single-sector read and write against a disposable test disk;
-- timeout, unsupported-feature, bounds, and status error handling.
+Status: implementation candidate; QEMU acceptance required.
+
+- [x] block-device trait and sector geometry contract;
+- [x] PCI BAR and modern virtio capability parsing;
+- [x] dedicated DMA-safe request, descriptor, available, and used rings;
+- [x] polling virtio-blk initialization;
+- [x] bounded single-sector read and write against a disposable test disk;
+- [x] restore the original disposable sector after the write probe;
+- [x] timeout, reset, unsupported-feature, bounds, and status error handling;
+- [ ] pass the pinned-toolchain headless QEMU smoke gate.
 
 Exit criteria:
 

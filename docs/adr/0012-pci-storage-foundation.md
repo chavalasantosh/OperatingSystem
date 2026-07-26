@@ -1,6 +1,6 @@
 # ADR 0012: PCI and Storage Foundation
 
-- Status: Accepted for M6 implementation
+- Status: Accepted; M6B transport decision recorded
 - Date: 2026-07-26
 
 ## Context
@@ -25,17 +25,32 @@ MSI/MSI-X, DMA allocator, block layer, or persistent filesystem yet.
    raw port I/O remains inside the x86-64 adapter.
 5. QEMU exposes a dedicated second `virtio-blk-pci` disk. M6A only proves that
    the exact controller is discovered and matched; it does not claim sector I/O.
-6. M6B will introduce a polling virtio-blk transport behind a block-device API.
-   Interrupt-driven completion is deferred until the polling contract passes.
-7. M6C will add bounded buffer-cache and VFS contracts without disk writes.
-8. M6D will mount a read-only FAT32 volume on the dedicated second disk. The
+6. M6B uses the modern virtio PCI capability model and negotiates only
+   `VIRTIO_F_VERSION_1`. Until the VM mapper supports explicit uncached device
+   mappings, the standardized virtio PCI configuration-access capability is
+   used for common, notify, and device-register access.
+7. M6B exposes an architecture-independent 512-byte sector contract. Queue
+   zero uses one allocator-owned direct-mapped DMA page and a split ring, with
+   one synchronous outstanding request and bounded polling.
+8. M6B identifies the dedicated disk through `VIRTIO_BLK_T_GET_ID`, reads a
+   seeded sector, writes and reads back one disposable sector, then restores
+   the original sector before the gate can pass.
+9. Interrupt-driven completion, indirect descriptors, multiple outstanding
+   requests, MSI-X, and explicit uncached MMIO mappings remain later transport
+   work.
+10. M6C will add bounded buffer-cache and VFS contracts without disk writes.
+11. M6D will mount a read-only FAT32 volume on the dedicated second disk. The
    EFI system partition is never used for filesystem experiments.
-9. Persistent writes require a later gate with device identity, bounds checks,
+12. Persistent writes require a later gate with device identity, bounds checks,
    checksums, reboot verification, corruption tests, and recovery evidence.
 
 ## Consequences
 
 - PCI inventory evidence is independently testable before DMA begins.
+- M6B DMA memory has one owner, a fixed layout, bounded request sizes, and no
+  lifetime shorter than the live device.
+- A failed M6B request cannot be silently treated as successful, and the
+  acceptance write is confined to the disposable test image.
 - The first transport is optimized for reproducible QEMU validation, while AHCI
   and NVMe remain discoverable future physical-hardware targets.
 - Early filesystem work can use standard FAT32 images and host tooling.

@@ -31,9 +31,9 @@ use sanju_kernel::shell::{Shell, ShellEnvironment};
 use sanju_kernel::startup::{self, StartupStage};
 use sanju_kernel::{
     BootInfo, Console, FoundationHardeningPhase2Report, FoundationHardeningPhase3Report,
-    FoundationHardeningReport, M5Report, M6aReport, MemoryMapInfo,
+    FoundationHardeningReport, M5Report, M6aReport, M6bReport, MemoryMapInfo,
     kernel_main_foundation_hardening, kernel_main_foundation_hardening_phase2,
-    kernel_main_foundation_hardening_phase3, kernel_main_m5, kernel_main_m6a,
+    kernel_main_foundation_hardening_phase3, kernel_main_m5, kernel_main_m6a, kernel_main_m6b,
 };
 
 type EfiHandle = *mut c_void;
@@ -1285,6 +1285,10 @@ extern "efiapi" fn sanju_m5_kernel_entry() -> ! {
         pci_functions,
         storage_controllers,
         virtio_block_targets,
+        block_capacity_sectors: 0,
+        block_queue_size: 0,
+        block_read_test_passed: false,
+        block_write_test_passed: false,
     };
     for byte in b"version\nuserspace\n" {
         shell.feed_byte(*byte, &mut null_console, &mut ramfs, &self_test_environment);
@@ -1351,7 +1355,7 @@ extern "efiapi" fn sanju_m5_kernel_entry() -> ! {
     let foundation_report = FoundationHardeningReport {
         toolchain_pinned: true,
         capability_registry_synchronized: sanju_kernel::generated::capabilities::REGISTRY_VERSION
-            == 4,
+            == 5,
         architecture_separation_verified: true,
         boot_info_version: boot_info.version,
         ownership_map_active: !ownership_map.is_empty(),
@@ -1462,6 +1466,46 @@ extern "efiapi" fn sanju_m5_kernel_entry() -> ! {
         );
     }
 
+    // SAFETY: M6A identified exactly one dedicated virtio-blk PCI target.
+    // SanjuOS owns PCI configuration mechanism #1, the physical direct map,
+    // and the frame allocator; QEMU exposes no guest IOMMU for this machine.
+    let (_block_device, block_probe) = match unsafe {
+        cpu::initialize_virtio_block(&pci_discovery.inventory, &mut frame_allocator)
+    } {
+        Ok(result) => result,
+        Err(_) => boot_failure(
+            &mut console,
+            "M6B-BLK-001",
+            "virtio block initialization or acceptance probe failed",
+        ),
+    };
+    let m6b_report = M6bReport {
+        block_device_api_active: true,
+        modern_pci_capabilities_active: block_probe.modern_pci_capabilities_active,
+        pci_bars_parsed: block_probe.pci_bars_parsed,
+        pci_bus_master_active: block_probe.pci_bus_master_active,
+        feature_negotiation_active: block_probe.feature_negotiation_active,
+        dma_queue_active: block_probe.dma_queue_active,
+        queue_size: block_probe.queue_size,
+        capacity_sectors: block_probe.capacity_sectors,
+        dedicated_device_identity_verified: block_probe.dedicated_device_identity_verified,
+        known_sector_read_passed: block_probe.known_sector_read_passed,
+        disposable_sector_write_readback_passed: block_probe
+            .disposable_sector_write_readback_passed,
+        disposable_sector_restored: block_probe.disposable_sector_restored,
+        bounds_check_passed: block_probe.bounds_check_passed,
+        timeout_protection_active: block_probe.timeout_protection_active,
+        m6a_regression_passed: m6a_report.gate_passed(),
+    };
+    kernel_main_m6b(&mut console, m6b_report);
+    if !m6b_report.gate_passed() {
+        boot_failure(
+            &mut console,
+            "M6B-GATE-001",
+            "virtio block transport acceptance gate failed",
+        );
+    }
+
     startup::print_stage(&mut console, StartupStage::Shell, true);
     Shell::start(&mut console);
 
@@ -1480,8 +1524,12 @@ extern "efiapi" fn sanju_m5_kernel_entry() -> ! {
             pci_functions,
             storage_controllers,
             virtio_block_targets,
+            block_capacity_sectors: m6b_report.capacity_sectors,
+            block_queue_size: usize::from(m6b_report.queue_size),
+            block_read_test_passed: m6b_report.known_sector_read_passed,
+            block_write_test_passed: m6b_report.disposable_sector_write_readback_passed,
         };
-        let smoke_commands = b"help\nuserspace\npci\nls\ncat welcome.txt\ntasks\nuptime\n";
+        let smoke_commands = b"help\nuserspace\npci\nblock\nls\ncat welcome.txt\ntasks\nuptime\n";
         for byte in smoke_commands {
             shell.feed_byte(*byte, &mut console, &mut ramfs, &environment);
         }
@@ -1515,6 +1563,10 @@ extern "efiapi" fn sanju_m5_kernel_entry() -> ! {
                         pci_functions,
                         storage_controllers,
                         virtio_block_targets,
+                        block_capacity_sectors: m6b_report.capacity_sectors,
+                        block_queue_size: usize::from(m6b_report.queue_size),
+                        block_read_test_passed: m6b_report.known_sector_read_passed,
+                        block_write_test_passed: m6b_report.disposable_sector_write_readback_passed,
                     };
                     shell.feed_byte(byte, &mut console, &mut ramfs, &environment);
                 }

@@ -18,6 +18,8 @@
 - expected milestone strings observed through debug I/O;
 - explicit QEMU success exit code.
 - exact attached-device topology for hardware-driver milestones;
+- seeded read and reversible disposable-sector write for M6B;
+- block out-of-bounds, status, reset, and timeout failure paths;
 - every previously accepted milestone rerun as a regression gate.
 
 ## Future gates

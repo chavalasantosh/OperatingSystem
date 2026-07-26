@@ -1,6 +1,6 @@
 # SanjuOS Capability Matrix
 
-Registry version: **4**
+Registry version: **5**
 
 This file is generated from `capabilities/capabilities.toml`. Do not edit it manually.
 
@@ -30,6 +30,7 @@ This file is generated from `capabilities/capabilities.toml`. Do not edit it man
 | `GFX-BOOT-001` | Graphical framebuffer startup splash | `planned` | `m6` | `assets/branding/sanjuos-logo.png` |
 | `PCI-ENUM-001` | PCI configuration mechanism #1 enumeration | `hardware_active` | `m6a` | `kernel/src/pci.rs`<br>`boot/uefi/src/arch/x86_64/pci.rs`<br>`scripts/smoke-test.sh` |
 | `STOR-DISC-001` | Virtio block PCI target discovery | `hardware_active` | `m6a` | `kernel/src/pci.rs`<br>`boot/uefi/src/arch/x86_64/pci.rs`<br>`scripts/smoke-test.sh` |
-| `STOR-BLK-001` | Architecture-independent block-device API | `planned` | `m6b` | `docs/process/SPRINT_M6_STORAGE_FOUNDATION.md` |
+| `STOR-BLK-001` | Architecture-independent block-device API | `hardware_active` | `m6b` | `kernel/src/block.rs`<br>`boot/uefi/src/arch/x86_64/virtio_block.rs`<br>`scripts/smoke-test.sh` |
+| `STOR-VIRTIO-001` | Polling modern virtio PCI block transport | `hardware_active` | `m6b` | `boot/uefi/src/arch/x86_64/virtio_block.rs`<br>`scripts/smoke-test.sh` |
 | `VFS-CORE-001` | VFS inode, mount, path, and handle contracts | `planned` | `m6c` | `docs/process/SPRINT_M6_STORAGE_FOUNDATION.md` |
 | `FS-FAT32-001` | Read-only FAT32 persistent filesystem | `planned` | `m6d` | `docs/process/SPRINT_M6_STORAGE_FOUNDATION.md` |

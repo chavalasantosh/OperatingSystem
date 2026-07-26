@@ -23,6 +23,10 @@ pub struct ShellEnvironment {
     pub pci_functions: usize,
     pub storage_controllers: usize,
     pub virtio_block_targets: usize,
+    pub block_capacity_sectors: u64,
+    pub block_queue_size: usize,
+    pub block_read_test_passed: bool,
+    pub block_write_test_passed: bool,
 }
 
 /// Interactive line editor and command dispatcher.
@@ -126,11 +130,11 @@ fn execute_line(
     match command {
         "help" => {
             console.write_line(concat!(
-                "Commands: help version uptime memory irq tasks pci ls cat write echo ",
+                "Commands: help version uptime memory irq tasks pci block ls cat write echo ",
                 "clear userspace",
             ));
         }
-        "version" => console.write_line("SanjuOS 0.0.9-prealpha (M6A)"),
+        "version" => console.write_line("SanjuOS 0.0.10-prealpha (M6B)"),
         "uptime" => {
             console.write_str("Timer ticks: ");
             console.write_u64(environment.timer_ticks);
@@ -167,6 +171,24 @@ fn execute_line(
             console.write_str(", virtio-blk targets: ");
             console.write_usize(environment.virtio_block_targets);
             console.write_line("");
+        }
+        "block" => {
+            console.write_str("Virtio block: ");
+            console.write_u64(environment.block_capacity_sectors);
+            console.write_str(" sectors, queue ");
+            console.write_usize(environment.block_queue_size);
+            console.write_str(", read ");
+            console.write_str(if environment.block_read_test_passed {
+                "passed"
+            } else {
+                "failed"
+            });
+            console.write_str(", write/readback ");
+            console.write_line(if environment.block_write_test_passed {
+                "passed"
+            } else {
+                "failed"
+            });
         }
         "ls" => {
             if fs.file_count() == 0 {
@@ -263,9 +285,13 @@ mod tests {
             pci_functions: 7,
             storage_controllers: 2,
             virtio_block_targets: 1,
+            block_capacity_sectors: 16_384,
+            block_queue_size: 8,
+            block_read_test_passed: true,
+            block_write_test_passed: true,
             ..ShellEnvironment::default()
         };
-        for byte in b"write note.txt hello\ncat note.txt\npci\n" {
+        for byte in b"write note.txt hello\ncat note.txt\npci\nblock\n" {
             shell.feed_byte(*byte, &mut console, &mut fs, &environment);
         }
 
@@ -276,6 +302,9 @@ mod tests {
                 .output
                 .contains("PCI functions: 7, storage controllers: 2, virtio-blk targets: 1\r\n")
         );
-        assert_eq!(shell.commands_executed(), 3);
+        assert!(console.output.contains(
+            "Virtio block: 16384 sectors, queue 8, read passed, write/readback passed\r\n"
+        ));
+        assert_eq!(shell.commands_executed(), 4);
     }
 }

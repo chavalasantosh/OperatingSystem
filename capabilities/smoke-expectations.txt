@@ -18,3 +18,5 @@ User and Ring 0 guard holes: active
 Process page-table reclamation: passed
 PCI configuration mechanism #1: active
 Virtio block PCI target: active
+Architecture-independent block-device API: active
+M6B block transport gate: passed

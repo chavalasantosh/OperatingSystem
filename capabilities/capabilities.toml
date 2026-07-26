@@ -1,4 +1,4 @@
-registry_version = 4
+registry_version = 5
 
 [[capability]]
 id = "SYS-TC-001"
@@ -214,10 +214,20 @@ required_boot_line = "Virtio block PCI target: active"
 [[capability]]
 id = "STOR-BLK-001"
 name = "Architecture-independent block-device API"
-status = "planned"
+status = "hardware_active"
 milestone = "m6b"
-evidence = ["docs/process/SPRINT_M6_STORAGE_FOUNDATION.md"]
+evidence = ["kernel/src/block.rs", "boot/uefi/src/arch/x86_64/virtio_block.rs", "scripts/smoke-test.sh"]
 boot_label = "Block-device API"
+required_boot_line = "Architecture-independent block-device API: active"
+
+[[capability]]
+id = "STOR-VIRTIO-001"
+name = "Polling modern virtio PCI block transport"
+status = "hardware_active"
+milestone = "m6b"
+evidence = ["boot/uefi/src/arch/x86_64/virtio_block.rs", "scripts/smoke-test.sh"]
+boot_label = "Virtio block transport"
+required_boot_line = "M6B block transport gate: passed"
 
 [[capability]]
 id = "VFS-CORE-001"

@@ -10,6 +10,89 @@ const CONFIG_ENABLE: u32 = 1 << 31;
 const MAX_QUEUED_BUSES: usize = 32;
 const INTERRUPT_FLAG: u64 = 1 << 9;
 
+/// Serialized access to PCI configuration mechanism #1.
+pub(super) struct PciConfigSession {
+    interrupts_were_enabled: bool,
+}
+
+impl PciConfigSession {
+    /// Acquires the bootstrap CPU's PCI configuration-port ownership.
+    ///
+    /// # Safety
+    ///
+    /// The caller must ensure no other CPU accesses `0xCF8`/`0xCFC`.
+    pub(super) unsafe fn acquire() -> Self {
+        Self {
+            // SAFETY: The caller establishes single-CPU configuration access.
+            interrupts_were_enabled: unsafe { disable_interrupts() },
+        }
+    }
+
+    #[must_use]
+    pub(super) unsafe fn read_u8(&self, address: PciAddress, offset: u8) -> u8 {
+        let selector = config_selector(address, offset);
+        // SAFETY: This session owns the selector/data port pair.
+        unsafe {
+            outl(CONFIG_ADDRESS_PORT, selector);
+            inb(CONFIG_DATA_PORT + u16::from(offset & 0x03))
+        }
+    }
+
+    #[must_use]
+    pub(super) unsafe fn read_u16(&self, address: PciAddress, offset: u8) -> u16 {
+        debug_assert!(offset.is_multiple_of(2));
+        let selector = config_selector(address, offset);
+        // SAFETY: This session owns the selector/data port pair.
+        unsafe {
+            outl(CONFIG_ADDRESS_PORT, selector);
+            inw(CONFIG_DATA_PORT + u16::from(offset & 0x02))
+        }
+    }
+
+    #[must_use]
+    pub(super) unsafe fn read_u32(&self, address: PciAddress, offset: u8) -> u32 {
+        // SAFETY: This session owns the selector/data port pair.
+        unsafe { read_config_u32(address, offset) }
+    }
+
+    pub(super) unsafe fn write_u8(&self, address: PciAddress, offset: u8, value: u8) {
+        let selector = config_selector(address, offset);
+        // SAFETY: This session owns the selector/data port pair.
+        unsafe {
+            outl(CONFIG_ADDRESS_PORT, selector);
+            outb(CONFIG_DATA_PORT + u16::from(offset & 0x03), value);
+        }
+    }
+
+    pub(super) unsafe fn write_u16(&self, address: PciAddress, offset: u8, value: u16) {
+        debug_assert!(offset.is_multiple_of(2));
+        let selector = config_selector(address, offset);
+        // SAFETY: This session owns the selector/data port pair.
+        unsafe {
+            outl(CONFIG_ADDRESS_PORT, selector);
+            outw(CONFIG_DATA_PORT + u16::from(offset & 0x02), value);
+        }
+    }
+
+    pub(super) unsafe fn write_u32(&self, address: PciAddress, offset: u8, value: u32) {
+        let selector = config_selector(address, offset);
+        // SAFETY: This session owns the selector/data port pair.
+        unsafe {
+            outl(CONFIG_ADDRESS_PORT, selector);
+            outl(CONFIG_DATA_PORT, value);
+        }
+    }
+}
+
+impl Drop for PciConfigSession {
+    fn drop(&mut self) {
+        // SAFETY: Restores exactly the interrupt state captured on acquisition.
+        unsafe {
+            restore_interrupts(self.interrupts_were_enabled);
+        }
+    }
+}
+
 /// Hardware evidence returned by the allocation-free PCI scanner.
 #[derive(Clone, Copy)]
 pub struct PciDiscoveryReport {
@@ -192,15 +275,43 @@ unsafe fn configuration_mechanism_one_available() -> bool {
 }
 
 unsafe fn read_config_u32(address: PciAddress, offset: u8) -> u32 {
-    let selector = CONFIG_ENABLE
-        | (u32::from(address.bus) << 16)
-        | (u32::from(address.device) << 11)
-        | (u32::from(address.function) << 8)
-        | u32::from(offset & 0xfc);
+    let selector = config_selector(address, offset);
     // SAFETY: The caller serializes the selector/data port pair.
     unsafe {
         outl(CONFIG_ADDRESS_PORT, selector);
         inl(CONFIG_DATA_PORT)
+    }
+}
+
+fn config_selector(address: PciAddress, offset: u8) -> u32 {
+    CONFIG_ENABLE
+        | (u32::from(address.bus) << 16)
+        | (u32::from(address.device) << 11)
+        | (u32::from(address.function) << 8)
+        | u32::from(offset & 0xfc)
+}
+
+unsafe fn outb(port: u16, value: u8) {
+    // SAFETY: The caller owns the selected x86 I/O port.
+    unsafe {
+        asm!(
+            "out dx, al",
+            in("dx") port,
+            in("al") value,
+            options(nomem, nostack, preserves_flags)
+        );
+    }
+}
+
+unsafe fn outw(port: u16, value: u16) {
+    // SAFETY: The caller owns the selected x86 I/O port.
+    unsafe {
+        asm!(
+            "out dx, ax",
+            in("dx") port,
+            in("ax") value,
+            options(nomem, nostack, preserves_flags)
+        );
     }
 }
 
@@ -247,6 +358,34 @@ unsafe fn inl(port: u16) -> u32 {
             "in eax, dx",
             in("dx") port,
             out("eax") value,
+            options(nomem, nostack, preserves_flags)
+        );
+    }
+    value
+}
+
+unsafe fn inb(port: u16) -> u8 {
+    let value: u8;
+    // SAFETY: The caller owns the selected x86 I/O port.
+    unsafe {
+        asm!(
+            "in al, dx",
+            in("dx") port,
+            out("al") value,
+            options(nomem, nostack, preserves_flags)
+        );
+    }
+    value
+}
+
+unsafe fn inw(port: u16) -> u16 {
+    let value: u16;
+    // SAFETY: The caller owns the selected x86 I/O port.
+    unsafe {
+        asm!(
+            "in ax, dx",
+            in("dx") port,
+            out("ax") value,
             options(nomem, nostack, preserves_flags)
         );
     }
