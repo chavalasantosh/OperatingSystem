@@ -6,6 +6,9 @@ identifiers remain unchanged until the public product identity is frozen. It is
 not a Linux distribution. Development proceeds through emulator-verified kernel
 milestones before any physical-disk work.
 
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+[![Ask DeepWiki](https://deepwiki.com/badge.svg)](https://deepwiki.com/chavalasantosh/OperatingSystem)
+
 ## Current checkpoint: M6C Bounded Cache and VFS
 
 The accepted baseline entering this phase is `v0.0.10-m6b`. M0 through FH2
