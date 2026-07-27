@@ -1,6 +1,6 @@
-# SanjuOS Capability Matrix
+# Soma OS Capability Matrix
 
-Registry version: **5**
+Registry version: **6**
 
 This file is generated from `capabilities/capabilities.toml`. Do not edit it manually.
 
@@ -14,7 +14,7 @@ This file is generated from `capabilities/capabilities.toml`. Do not edit it man
 | `MEM-PF-001` | Bitmap physical frame allocator with alloc and free | `hardware_active` | `foundation-hardening-1` | `kernel/src/memory.rs` |
 | `MEM-PTB-001` | Dedicated page-table bootstrap pool | `hardware_active` | `foundation-hardening-1` | `kernel/src/memory.rs` |
 | `MEM-VM-001` | Hardware four-level page-table manager | `acceptance_prototype` | `foundation-hardening-2` | `kernel/src/paging.rs`<br>`boot/uefi/src/arch/x86_64/paging.rs` |
-| `MEM-CR3-001` | Fresh SanjuOS-owned PML4 and CR3 transition | `hardware_active` | `foundation-hardening-2` | `boot/uefi/src/arch/x86_64/paging.rs`<br>`scripts/smoke-test.sh` |
+| `MEM-CR3-001` | Fresh Soma OS-owned PML4 and CR3 transition | `hardware_active` | `foundation-hardening-2` | `boot/uefi/src/arch/x86_64/paging.rs`<br>`scripts/smoke-test.sh` |
 | `MEM-DMAP-001` | Higher-half physical direct map | `acceptance_prototype` | `foundation-hardening-2` | `kernel/src/paging.rs`<br>`boot/uefi/src/arch/x86_64/paging.rs` |
 | `MEM-WX-001` | Page-granular kernel W^X enforcement | `verified` | `foundation-hardening-2` | `boot/uefi/src/arch/x86_64/paging.rs`<br>`scripts/smoke-test.sh` |
 | `MEM-GUARD-001` | Hardware-unmapped guard-hole probe | `acceptance_prototype` | `foundation-hardening-2` | `kernel/src/paging.rs`<br>`boot/uefi/src/arch/x86_64/paging.rs` |
@@ -32,5 +32,7 @@ This file is generated from `capabilities/capabilities.toml`. Do not edit it man
 | `STOR-DISC-001` | Virtio block PCI target discovery | `hardware_active` | `m6a` | `kernel/src/pci.rs`<br>`boot/uefi/src/arch/x86_64/pci.rs`<br>`scripts/smoke-test.sh` |
 | `STOR-BLK-001` | Architecture-independent block-device API | `hardware_active` | `m6b` | `kernel/src/block.rs`<br>`boot/uefi/src/arch/x86_64/virtio_block.rs`<br>`scripts/smoke-test.sh` |
 | `STOR-VIRTIO-001` | Polling modern virtio PCI block transport | `hardware_active` | `m6b` | `boot/uefi/src/arch/x86_64/virtio_block.rs`<br>`scripts/smoke-test.sh` |
-| `VFS-CORE-001` | VFS inode, mount, path, and handle contracts | `planned` | `m6c` | `docs/process/SPRINT_M6_STORAGE_FOUNDATION.md` |
+| `STOR-CACHE-001` | Bounded read-only block cache | `verified` | `m6c` | `kernel/src/cache.rs`<br>`boot/uefi/src/main.rs`<br>`scripts/smoke-test.sh` |
+| `VFS-CORE-001` | VFS inode, mount, path, and handle contracts | `verified` | `m6c` | `kernel/src/vfs.rs`<br>`kernel/src/fs.rs`<br>`boot/uefi/src/main.rs`<br>`scripts/smoke-test.sh` |
+| `VFS-HANDLE-001` | Generation-protected bounded user file handles | `verified` | `m6c` | `kernel/src/vfs.rs`<br>`boot/uefi/src/main.rs`<br>`scripts/smoke-test.sh` |
 | `FS-FAT32-001` | Read-only FAT32 persistent filesystem | `planned` | `m6d` | `docs/process/SPRINT_M6_STORAGE_FOUNDATION.md` |

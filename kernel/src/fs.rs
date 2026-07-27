@@ -4,9 +4,12 @@
 
 use core::str;
 
+use crate::vfs::{FileSystem, Inode, InodeId, NodeKind, PathError, Superblock, VfsError};
+
 pub const MAX_FILES: usize = 8;
-const MAX_NAME_LEN: usize = 24;
-const MAX_FILE_BYTES: usize = 512;
+pub const MAX_NAME_LEN: usize = 24;
+pub const MAX_FILE_BYTES: usize = 512;
+pub const RAMFS_ROOT_INODE: InodeId = InodeId(1);
 
 /// Filesystem operation failures.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -70,14 +73,14 @@ impl RamFs {
         let _ = fs.write(
             "welcome.txt",
             concat!(
-                "Welcome to SanjuOS. The kernel shell, scheduler, timer, ",
-                "keyboard pipeline, and RAM filesystem are active.\n"
+                "Welcome to Soma OS. Protected userspace, storage, the virtual ",
+                "filesystem, and the interactive shell are active.\n"
             )
             .as_bytes(),
         );
         let _ = fs.write(
             "system.txt",
-            b"SanjuOS M5: protected userspace, syscalls, ELF loading, and branded startup.\n",
+            b"Soma OS M6C: bounded block caching and VFS contracts are active.\n",
         );
         fs
     }
@@ -146,6 +149,100 @@ impl RamFs {
 impl Default for RamFs {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+impl FileSystem for RamFs {
+    fn superblock(&self) -> Superblock {
+        Superblock {
+            filesystem_name: "ramfs",
+            root_inode: RAMFS_ROOT_INODE,
+            block_size: 1,
+            read_only: false,
+        }
+    }
+
+    fn lookup(&self, parent: InodeId, name: &str) -> Result<Inode, VfsError> {
+        if parent != RAMFS_ROOT_INODE {
+            return Err(VfsError::NotDirectory);
+        }
+        let index = self.find_index(name).ok_or(VfsError::NotFound)?;
+        Ok(self.inode_for_index(index))
+    }
+
+    fn read(&self, inode: InodeId, offset: u64, destination: &mut [u8]) -> Result<usize, VfsError> {
+        if inode == RAMFS_ROOT_INODE {
+            return Err(VfsError::IsDirectory);
+        }
+        let index = inode_index(inode)?;
+        let entry = self
+            .files
+            .get(index)
+            .filter(|entry| entry.occupied)
+            .ok_or(VfsError::NotFound)?;
+        let offset = usize::try_from(offset).map_err(|_| VfsError::InvalidOffset)?;
+        if offset >= entry.data_len {
+            return Ok(0);
+        }
+        let count = destination.len().min(entry.data_len - offset);
+        destination[..count].copy_from_slice(&entry.data[offset..offset + count]);
+        Ok(count)
+    }
+
+    fn create_or_replace(
+        &mut self,
+        parent: InodeId,
+        name: &str,
+        data: &[u8],
+    ) -> Result<Inode, VfsError> {
+        if parent != RAMFS_ROOT_INODE {
+            return Err(VfsError::NotDirectory);
+        }
+        self.write(name, data).map_err(vfs_error)?;
+        let index = self.find_index(name).ok_or(VfsError::Backend)?;
+        Ok(self.inode_for_index(index))
+    }
+
+    fn visit_directory(
+        &self,
+        inode: InodeId,
+        visitor: &mut dyn FnMut(&str, Inode),
+    ) -> Result<(), VfsError> {
+        if inode != RAMFS_ROOT_INODE {
+            return Err(VfsError::NotDirectory);
+        }
+        for (index, entry) in self.files.iter().enumerate() {
+            if entry.occupied {
+                visitor(entry.name(), self.inode_for_index(index));
+            }
+        }
+        Ok(())
+    }
+}
+
+impl RamFs {
+    fn inode_for_index(&self, index: usize) -> Inode {
+        let entry = &self.files[index];
+        Inode {
+            id: InodeId(u64::try_from(index).unwrap_or(u64::MAX).saturating_add(2)),
+            kind: NodeKind::File,
+            size: u64::try_from(entry.data_len).unwrap_or(u64::MAX),
+        }
+    }
+}
+
+fn inode_index(inode: InodeId) -> Result<usize, VfsError> {
+    let raw = inode.0.checked_sub(2).ok_or(VfsError::NotFound)?;
+    usize::try_from(raw).map_err(|_| VfsError::NotFound)
+}
+
+const fn vfs_error(error: FsError) -> VfsError {
+    match error {
+        FsError::EmptyName => VfsError::Path(PathError::Empty),
+        FsError::NameTooLong => VfsError::Path(PathError::ComponentTooLong),
+        FsError::DataTooLarge => VfsError::FileTooLarge,
+        FsError::FileTableFull => VfsError::NoSpace,
+        FsError::NotFound => VfsError::NotFound,
     }
 }
 

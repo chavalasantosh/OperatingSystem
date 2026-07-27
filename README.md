@@ -1,17 +1,17 @@
-# SanjuOS
+# Soma OS
 
-![SanjuOS logo](assets/branding/sanjuos-logo.png)
-
-SanjuOS is an independent, Rust-first desktop operating-system project. It is
+Soma OS is the current working identity of an independent, Rust-first desktop
+operating-system project. Historical release tags and internal `sanju-*` crate
+identifiers remain unchanged until the public product identity is frozen. It is
 not a Linux distribution. Development proceeds through emulator-verified kernel
 milestones before any physical-disk work.
 
-## Current checkpoint: M6B Virtio Block Transport
+## Current checkpoint: M6C Bounded Cache and VFS
 
-The accepted baseline entering this phase was the Foundation Hardening Phase 2
-candidate. M0 through FH2 proved UEFI ownership transfer, protected kernel
+The accepted baseline entering this phase is `v0.0.10-m6b`. M0 through FH2
+proved UEFI ownership transfer, protected kernel
 execution, interrupts, Ring 3 entry, `SYSCALL`/`SYSRET`, ELF64 loading,
-recoverable user faults, physical ownership, and a fresh SanjuOS page-table
+recoverable user faults, physical ownership, and a fresh Soma OS page-table
 root.
 
 The accepted `v0.0.8-fh3` release turned the process runtime into an active
@@ -51,10 +51,21 @@ M6B implements that gate on the dedicated QEMU test disk:
 - a seeded read test plus a disposable write/readback/restore transaction;
 - a `block` shell diagnostic and exact QEMU acceptance evidence.
 
+M6C builds the filesystem boundary without enabling persistent writes:
+
+- a 16-sector, allocation-free, read-through LRU cache;
+- one live first-miss/repeat-hit probe proving the second read avoids transport;
+- a hard read-only cache policy with zero dirty entries;
+- fixed inode, superblock, mount, canonical path, and directory contracts;
+- component-boundary mount resolution and bounded `.`/`..` normalization;
+- generation-protected user file handles that reject stale identifiers;
+- RAMFS accessed through the same VFS interface reserved for FAT32;
+- `cache` and `mounts` shell diagnostics plus exact smoke evidence.
+
 ## Shell commands
 
 ```text
-help version userspace uptime memory irq tasks pci block ls cat write echo clear
+help version userspace uptime memory irq tasks pci block cache mounts ls cat write echo clear
 ```
 
 ## Build and verify
@@ -77,20 +88,22 @@ boot/uefi/          UEFI orchestration and x86-64 platform implementation
 kernel/             Boot contracts, memory ownership, allocators, kernel models
 capabilities/       Canonical capability registry and generated smoke evidence
 user/programs/      Position-independent Ring 3 assembly programs
-assets/branding/    Approved SanjuOS graphical logo
+assets/branding/    Historical and future product identity assets
 scripts/            Build, generation, ABI, QEMU, and validation automation
 docs/               Requirements, architecture, ADRs, testing, security, process
 ```
 
 ## Current boundary
 
-M6B and FH3 remain single-core and PIT-driven. Block completion is synchronous
+M6C and FH3 remain single-core and PIT-driven. Block completion is synchronous
 and polling, one request is outstanding at a time, and only the explicitly
-identified disposable QEMU disk is used. The combined EFI-stub kernel still
-retains a bounded identity mapping while a separate high-half kernel image is
-designed. A block cache, VFS, read-only FAT32, persistent writes, physical-disk
-installation, graphics, SMP, and local APIC timers remain later gates.
+identified disposable QEMU disk is used. The cache cannot issue writes and
+cannot contain dirty entries. RAMFS remains the only writable filesystem. The
+combined EFI-stub kernel still retains a bounded identity mapping while a
+separate high-half kernel image is designed. Read-only FAT32, persistent
+writes, physical-disk installation, graphics, SMP, and local APIC timers remain
+later gates.
 
 ## Safety
 
-SanjuOS remains emulator-only. Do not install it on a physical disk.
+Soma OS remains emulator-only. Do not install it on a physical disk.

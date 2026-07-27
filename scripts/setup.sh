@@ -14,4 +14,4 @@ rustup toolchain install 1.97.0 \
 rustup override set 1.97.0
 rustup show active-toolchain
 
-printf '%s\n' "SanjuOS Rust 1.97.0 toolchain is ready."
+printf '%s\n' "Soma OS Rust 1.97.0 toolchain is ready."

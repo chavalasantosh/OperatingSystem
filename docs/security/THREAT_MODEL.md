@@ -67,6 +67,8 @@
 - untrusted BAR and capability-list metadata;
 - device-controlled DMA addresses and lengths;
 - malformed sector geometry, partition tables, FAT metadata, and cluster chains;
+- stale file handles, path traversal, and mount-prefix confusion;
+- dirty cache eviction without recovery or flush guarantees;
 - accidental selection of the EFI system partition or a physical user disk.
 
 ## M6 controls
@@ -79,6 +81,13 @@
   device status checks, and a finite polling limit;
 - the sole M6B write target is a disposable sector whose original bytes are
   restored before the acceptance gate passes;
+- the M6C cache rejects all writes before transport and requires zero dirty
+  entries at its acceptance boundary;
+- canonical absolute paths are byte- and depth-bounded, and `..` cannot escape
+  the namespace root;
+- mount resolution checks component boundaries and uses the longest prefix;
+- user file handles include generations so closed identifiers cannot alias a
+  reused slot;
 - filesystem work begins read-only with geometry and bounds validation;
 - persistent writes remain blocked until reboot, corruption, and recovery gates
   are implemented.

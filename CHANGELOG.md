@@ -1,5 +1,26 @@
 # Changelog
 
+## M6C Bounded Cache and VFS candidate — 2026-07-27
+
+- Adopted Soma OS as the temporary user-facing working identity while retaining
+  historical tags and internal crate identifiers.
+- Added a 16-sector, allocation-free, read-through LRU block cache.
+- Made the M6C dirty-state policy explicit: every persistent write is rejected
+  before transport and the cache must retain zero dirty entries.
+- Added live first-miss/repeat-hit evidence against the accepted virtio device.
+- Added fixed inode, superblock, mount, canonical path, directory, and backend
+  contracts.
+- Added bounded absolute-path normalization with component and depth limits.
+- Added a four-entry mount table with component-boundary longest-prefix lookup.
+- Added a 32-entry generation-protected user file-handle table.
+- Adapted RAMFS and shell file operations behind the VFS contract.
+- Added `cache` and `mounts` diagnostics.
+- Added capability registry version 6 and mandatory M6B regression evidence.
+
+M6C does not mount a persistent filesystem and cannot leave persistent dirty
+data. Read-only FAT32 remains the M6D gate; persistent writes remain deferred
+until corruption, recovery, and power-loss behavior are designed and tested.
+
 ## M6B Virtio Block Transport candidate — 2026-07-26
 
 - Architecture-independent 512-byte sector block-device contract.

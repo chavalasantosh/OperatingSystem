@@ -16,5 +16,5 @@ _start:
     ud2
 .section .rodata
 message:
-    .ascii "hello: running from SanjuOS Ring 3\n"
+    .ascii "hello: running from Soma OS Ring 3\n"
 .set message_len, . - message

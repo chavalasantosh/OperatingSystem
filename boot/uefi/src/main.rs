@@ -13,6 +13,7 @@ use core::ptr::{addr_of, addr_of_mut};
 use sanju_kernel::boot_info::{
     FramebufferInfo, OptionalPhysicalAddress, PhysicalRange, PixelFormat,
 };
+use sanju_kernel::cache::{BlockCache, CacheError, DEFAULT_CACHE_ENTRIES, DirtyStatePolicy};
 use sanju_kernel::elf::load_position_independent;
 use sanju_kernel::fs::RamFs;
 use sanju_kernel::heap::KernelHeap;
@@ -29,11 +30,15 @@ use sanju_kernel::process::{AddressSpace, ProcessTable};
 use sanju_kernel::scheduler::{Scheduler, TaskKind};
 use sanju_kernel::shell::{Shell, ShellEnvironment};
 use sanju_kernel::startup::{self, StartupStage};
+use sanju_kernel::vfs::{
+    HandleRights, MAX_PATH_COMPONENTS, NodeKind, NormalizedPath, PathError, Vfs, VfsError,
+};
 use sanju_kernel::{
     BootInfo, Console, FoundationHardeningPhase2Report, FoundationHardeningPhase3Report,
-    FoundationHardeningReport, M5Report, M6aReport, M6bReport, MemoryMapInfo,
+    FoundationHardeningReport, M5Report, M6aReport, M6bReport, M6cReport, MemoryMapInfo,
     kernel_main_foundation_hardening, kernel_main_foundation_hardening_phase2,
     kernel_main_foundation_hardening_phase3, kernel_main_m5, kernel_main_m6a, kernel_main_m6b,
+    kernel_main_m6c,
 };
 
 type EfiHandle = *mut c_void;
@@ -449,7 +454,7 @@ extern "efiapi" fn efi_main(
 
     pre_exit.clear_screen();
     startup::print_logo(&mut pre_exit);
-    pre_exit.write_line("SanjuOS M5 boot transition");
+    pre_exit.write_line("Soma OS M5 boot transition");
     startup::print_stage(&mut pre_exit, StartupStage::Firmware, true);
     pre_exit.write_line("Capturing UEFI memory map...");
 
@@ -1271,6 +1276,7 @@ extern "efiapi" fn sanju_m5_kernel_entry() -> ! {
     let mut ramfs = RamFs::with_defaults();
     let _ = ramfs.write("init.elf", b"embedded protected user executable");
     let _ = ramfs.write("hello.elf", b"embedded protected user executable");
+    let mut vfs = Vfs::new(ramfs);
     let mut shell = Shell::new();
     let mut null_console = NullConsole;
     let self_test_environment = ShellEnvironment {
@@ -1289,9 +1295,18 @@ extern "efiapi" fn sanju_m5_kernel_entry() -> ! {
         block_queue_size: 0,
         block_read_test_passed: false,
         block_write_test_passed: false,
+        cache_capacity: 0,
+        cache_hits: 0,
+        cache_misses: 0,
+        cache_device_reads: 0,
+        cache_dirty_entries: 0,
+        cache_read_only_policy: false,
+        vfs_mounts: vfs.mounts().len(),
+        vfs_handle_capacity: vfs.handles().capacity(),
+        vfs_path_normalization_passed: false,
     };
     for byte in b"version\nuserspace\n" {
-        shell.feed_byte(*byte, &mut null_console, &mut ramfs, &self_test_environment);
+        shell.feed_byte(*byte, &mut null_console, &mut vfs, &self_test_environment);
     }
 
     let roots_are_distinct =
@@ -1355,7 +1370,7 @@ extern "efiapi" fn sanju_m5_kernel_entry() -> ! {
     let foundation_report = FoundationHardeningReport {
         toolchain_pinned: true,
         capability_registry_synchronized: sanju_kernel::generated::capabilities::REGISTRY_VERSION
-            == 5,
+            == 6,
         architecture_separation_verified: true,
         boot_info_version: boot_info.version,
         ownership_map_active: !ownership_map.is_empty(),
@@ -1469,7 +1484,7 @@ extern "efiapi" fn sanju_m5_kernel_entry() -> ! {
     // SAFETY: M6A identified exactly one dedicated virtio-blk PCI target.
     // SanjuOS owns PCI configuration mechanism #1, the physical direct map,
     // and the frame allocator; QEMU exposes no guest IOMMU for this machine.
-    let (_block_device, block_probe) = match unsafe {
+    let (block_device, block_probe) = match unsafe {
         cpu::initialize_virtio_block(&pci_discovery.inventory, &mut frame_allocator)
     } {
         Ok(result) => result,
@@ -1506,6 +1521,113 @@ extern "efiapi" fn sanju_m5_kernel_entry() -> ! {
         );
     }
 
+    let mut block_cache = match BlockCache::<_, DEFAULT_CACHE_ENTRIES>::new(
+        block_device,
+        DirtyStatePolicy::RejectWrites,
+    ) {
+        Ok(cache) => cache,
+        Err(_) => boot_failure(
+            &mut console,
+            "M6C-CACHE-001",
+            "bounded block cache initialization failed",
+        ),
+    };
+    let mut first_cache_read = [0_u8; sanju_kernel::block::SECTOR_SIZE];
+    let mut repeat_cache_read = [0_u8; sanju_kernel::block::SECTOR_SIZE];
+    if block_cache.read_sector(8, &mut first_cache_read).is_err() {
+        boot_failure(
+            &mut console,
+            "M6C-CACHE-002",
+            "first cache-backed sector read failed",
+        );
+    }
+    let first_cache_stats = block_cache.stats();
+    if block_cache.read_sector(8, &mut repeat_cache_read).is_err() {
+        boot_failure(
+            &mut console,
+            "M6C-CACHE-003",
+            "repeat cache-backed sector read failed",
+        );
+    }
+    let cache_write_rejected =
+        block_cache.write_sector(8, &first_cache_read) == Err(CacheError::ReadOnlyPolicy);
+    let cache_stats = block_cache.stats();
+
+    let normalized_path = NormalizedPath::parse("/workspace/./../welcome.txt");
+    let path_normalization_passed = normalized_path
+        .as_ref()
+        .is_ok_and(|path| path.as_str() == "/welcome.txt" && path.component_count() == 1);
+    let root_bounded_path = NormalizedPath::parse("/../../welcome.txt");
+    let excessive_depth = NormalizedPath::parse("/a/b/c/d/e/f/g/h/i/j/k/l/m/n/o/p/q");
+    let traversal_bounds_passed = MAX_PATH_COMPONENTS == 16
+        && root_bounded_path
+            .as_ref()
+            .is_ok_and(|path| path.as_str() == "/welcome.txt")
+        && excessive_depth == Err(PathError::TooManyComponents);
+
+    let vfs_contracts_active = vfs
+        .resolve("/")
+        .is_ok_and(|inode| inode.kind == NodeKind::Directory)
+        && vfs
+            .resolve("/welcome.txt")
+            .is_ok_and(|inode| inode.kind == NodeKind::File && inode.size > 0);
+    let vfs_mounts = vfs.mounts().len();
+    let vfs_handle_capacity = vfs.handles().capacity();
+    let mut vfs_probe_data = [0_u8; 16];
+    let (ramfs_adapter_active, stale_handle_rejection_passed) =
+        match vfs.open("/welcome.txt", HandleRights::ReadOnly) {
+            Ok(handle) => {
+                let read = vfs.read(handle, &mut vfs_probe_data);
+                let close = vfs.close(handle);
+                let stale_rejected =
+                    vfs.read(handle, &mut vfs_probe_data) == Err(VfsError::StaleHandle);
+                (
+                    read.is_ok_and(|count| {
+                        count >= 7
+                            && count <= vfs_probe_data.len()
+                            && vfs_probe_data[..count].starts_with(b"Welcome")
+                    }) && close.is_ok(),
+                    stale_rejected,
+                )
+            }
+            Err(_) => (false, false),
+        };
+    let user_handle_table_active =
+        vfs_handle_capacity == sanju_kernel::vfs::MAX_USER_HANDLES && vfs.handles().is_empty();
+
+    let m6c_report = M6cReport {
+        block_cache_active: block_cache.capacity() == DEFAULT_CACHE_ENTRIES,
+        cache_capacity_entries: block_cache.capacity(),
+        first_read_miss_passed: first_cache_stats.misses == 1
+            && first_cache_stats.hits == 0
+            && first_cache_stats.device_reads == 1,
+        repeat_read_hit_passed: cache_stats.misses == 1
+            && cache_stats.hits == 1
+            && cache_stats.device_reads == 1,
+        cached_data_consistent: first_cache_read == repeat_cache_read,
+        read_only_dirty_policy_active: block_cache.policy() == DirtyStatePolicy::RejectWrites,
+        rejected_cache_writes: cache_stats.rejected_writes,
+        dirty_cache_entries: cache_stats.dirty_entries,
+        vfs_contracts_active,
+        mount_table_active: !vfs.mounts().is_empty(),
+        mounts: vfs_mounts,
+        ramfs_adapter_active,
+        path_normalization_passed,
+        traversal_bounds_passed,
+        user_handle_table_active,
+        stale_handle_rejection_passed,
+        persistent_writes_disabled: cache_write_rejected && cache_stats.dirty_entries == 0,
+        m6b_regression_passed: m6b_report.gate_passed(),
+    };
+    kernel_main_m6c(&mut console, m6c_report);
+    if !m6c_report.gate_passed() {
+        boot_failure(
+            &mut console,
+            "M6C-GATE-001",
+            "bounded block cache and VFS acceptance gate failed",
+        );
+    }
+
     startup::print_stage(&mut console, StartupStage::Shell, true);
     Shell::start(&mut console);
 
@@ -1528,10 +1650,20 @@ extern "efiapi" fn sanju_m5_kernel_entry() -> ! {
             block_queue_size: usize::from(m6b_report.queue_size),
             block_read_test_passed: m6b_report.known_sector_read_passed,
             block_write_test_passed: m6b_report.disposable_sector_write_readback_passed,
+            cache_capacity: m6c_report.cache_capacity_entries,
+            cache_hits: cache_stats.hits,
+            cache_misses: cache_stats.misses,
+            cache_device_reads: cache_stats.device_reads,
+            cache_dirty_entries: cache_stats.dirty_entries,
+            cache_read_only_policy: m6c_report.read_only_dirty_policy_active,
+            vfs_mounts,
+            vfs_handle_capacity,
+            vfs_path_normalization_passed: path_normalization_passed,
         };
-        let smoke_commands = b"help\nuserspace\npci\nblock\nls\ncat welcome.txt\ntasks\nuptime\n";
+        let smoke_commands =
+            b"help\nuserspace\npci\nblock\ncache\nmounts\nls\ncat welcome.txt\ntasks\nuptime\n";
         for byte in smoke_commands {
-            shell.feed_byte(*byte, &mut console, &mut ramfs, &environment);
+            shell.feed_byte(*byte, &mut console, &mut vfs, &environment);
         }
         cpu::qemu::exit_success();
     }
@@ -1567,8 +1699,17 @@ extern "efiapi" fn sanju_m5_kernel_entry() -> ! {
                         block_queue_size: usize::from(m6b_report.queue_size),
                         block_read_test_passed: m6b_report.known_sector_read_passed,
                         block_write_test_passed: m6b_report.disposable_sector_write_readback_passed,
+                        cache_capacity: m6c_report.cache_capacity_entries,
+                        cache_hits: cache_stats.hits,
+                        cache_misses: cache_stats.misses,
+                        cache_device_reads: cache_stats.device_reads,
+                        cache_dirty_entries: cache_stats.dirty_entries,
+                        cache_read_only_policy: m6c_report.read_only_dirty_policy_active,
+                        vfs_mounts,
+                        vfs_handle_capacity,
+                        vfs_path_normalization_passed: path_normalization_passed,
                     };
-                    shell.feed_byte(byte, &mut console, &mut ramfs, &environment);
+                    shell.feed_byte(byte, &mut console, &mut vfs, &environment);
                 }
             }
 
@@ -1883,7 +2024,7 @@ fn capture_memory_map(get_memory_map: GetMemoryMap) -> Result<MemoryMapSnapshot,
 #[panic_handler]
 fn panic(_info: &PanicInfo<'_>) -> ! {
     let mut console = KernelConsole::initialize();
-    console.write_line("FATAL: SanjuOS panic during early boot.");
+    console.write_line("FATAL: Soma OS panic during early boot.");
 
     #[cfg(feature = "qemu-test")]
     cpu::qemu::exit_failure();

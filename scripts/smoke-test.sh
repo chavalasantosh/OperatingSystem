@@ -56,12 +56,12 @@ if [[ "$qemu_status" -ne 33 ]]; then
   exit 1
 fi
 
-grep -Fq "SanjuOS M5 boot transition" build/qemu-debug.log
+grep -Fq "Soma OS M5 boot transition" build/qemu-debug.log
 grep -Fq "Milestone M5: protected user-space foundation and branded startup." build/qemu-debug.log
-grep -Fq "init: SanjuOS protected userspace online" build/qemu-debug.log
-grep -Fq "hello: running from SanjuOS Ring 3" build/qemu-debug.log
-grep -Fq "SanjuOS: isolated user exception" build/qemu-debug.log
-grep -Fq "SanjuOS page-table ownership: active" build/qemu-debug.log
+grep -Fq "init: Soma OS protected userspace online" build/qemu-debug.log
+grep -Fq "hello: running from Soma OS Ring 3" build/qemu-debug.log
+grep -Fq "Soma OS: isolated user exception" build/qemu-debug.log
+grep -Fq "Soma OS page-table ownership: active" build/qemu-debug.log
 grep -Fq "Kernel heap: active" build/qemu-debug.log
 grep -Fq "Ring 3 execution: active" build/qemu-debug.log
 grep -Fq "User address-space model: active" build/qemu-debug.log
@@ -69,7 +69,7 @@ grep -Fq "System-call interface: active" build/qemu-debug.log
 grep -Fq "ELF64 loader: active" build/qemu-debug.log
 grep -Fq "User processes launched: 3" build/qemu-debug.log
 grep -Fq "User fault isolation: passed" build/qemu-debug.log
-grep -Fq "SanjuOS logo print: active" build/qemu-debug.log
+grep -Fq "Soma OS logo print: active" build/qemu-debug.log
 grep -Fq "M5 protected user-space gate: passed" build/qemu-debug.log
 while IFS= read -r expected_line; do
   [[ -z "$expected_line" || "$expected_line" == \#* ]] && continue
@@ -92,14 +92,14 @@ grep -Fq "Ring 3 preemption processes: 2" build/qemu-debug.log
 grep -Fq "M5 regression under private CR3: passed" build/qemu-debug.log
 grep -Fq "FH2 paging regression under FH3: passed" build/qemu-debug.log
 grep -Fq "Foundation hardening phase 3: passed" build/qemu-debug.log
-grep -Fq "SanjuOS M6A PCI and Storage Discovery" build/qemu-debug.log
+grep -Fq "Soma OS M6A PCI and Storage Discovery" build/qemu-debug.log
 grep -Fq "PCI configuration mechanism #1: active" build/qemu-debug.log
 grep -Fq "PCI inventory completeness: active" build/qemu-debug.log
 grep -Fq "Virtio block PCI target: active" build/qemu-debug.log
 grep -Fq "Storage driver target: virtio-blk-pci" build/qemu-debug.log
 grep -Fq "FH3 regression under M6A: passed" build/qemu-debug.log
 grep -Fq "M6A PCI discovery gate: passed" build/qemu-debug.log
-grep -Fq "SanjuOS M6B Virtio Block Transport" build/qemu-debug.log
+grep -Fq "Soma OS M6B Virtio Block Transport" build/qemu-debug.log
 grep -Fq "Architecture-independent block-device API: active" build/qemu-debug.log
 grep -Fq "Modern virtio PCI capabilities: active" build/qemu-debug.log
 grep -Fq "PCI bus mastering: active" build/qemu-debug.log
@@ -113,10 +113,31 @@ grep -Fq "Block bounds rejection test: passed" build/qemu-debug.log
 grep -Fq "Block request timeout protection: active" build/qemu-debug.log
 grep -Fq "M6A regression under M6B: passed" build/qemu-debug.log
 grep -Fq "M6B block transport gate: passed" build/qemu-debug.log
-grep -Fq "SanjuOS kernel shell ready." build/qemu-debug.log
+grep -Fq "Soma OS M6C Cache and Virtual Filesystem" build/qemu-debug.log
+grep -Fq "Fixed-capacity block cache: active" build/qemu-debug.log
+grep -Fq "Cache first-read miss test: passed" build/qemu-debug.log
+grep -Fq "Cache repeat-read hit test: passed" build/qemu-debug.log
+grep -Fq "Cached data consistency test: passed" build/qemu-debug.log
+grep -Fq "Read-only dirty-state policy: active" build/qemu-debug.log
+grep -Fq "Dirty cache entries: 0" build/qemu-debug.log
+grep -Fq "VFS contracts: active" build/qemu-debug.log
+grep -Fq "Bounded mount table: active" build/qemu-debug.log
+grep -Fq "RAMFS VFS adapter: active" build/qemu-debug.log
+grep -Fq "Absolute-path normalization test: passed" build/qemu-debug.log
+grep -Fq "Path traversal bounds test: passed" build/qemu-debug.log
+grep -Fq "Generation-protected user handle table: active" build/qemu-debug.log
+grep -Fq "Stale file-handle rejection test: passed" build/qemu-debug.log
+grep -Fq "Persistent storage writes: disabled" build/qemu-debug.log
+grep -Fq "M6B regression under M6C: passed" build/qemu-debug.log
+grep -Fq "M6C cache and VFS gate: passed" build/qemu-debug.log
+grep -Fq "Soma OS kernel shell ready." build/qemu-debug.log
 grep -Fq "M5 protected userspace, syscalls, and ELF loader are active." build/qemu-debug.log
 grep -Fq "virtio-blk targets: 1" build/qemu-debug.log
 grep -Fq "write/readback passed" build/qemu-debug.log
+grep -Fq "Block cache: 16 sectors, hits 1, misses 1, device reads 1, dirty 0, policy read-only" build/qemu-debug.log
+grep -Fq "VFS mounts: 1, handle capacity: 32, normalized paths: active" build/qemu-debug.log
+grep -Fq "/ ramfs read-write" build/qemu-debug.log
+grep -Fq "Welcome to Soma OS." build/qemu-debug.log
 
 echo "QEMU smoke test passed."
 cat build/qemu-debug.log

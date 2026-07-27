@@ -1,14 +1,13 @@
-//! SanjuOS branded startup experience.
+//! Soma OS branded startup experience.
 
 use crate::Console;
 
 pub const STARTUP_LOGO: &[&str] = &[
-    "  _____              _        ____   _____ ",
-    " / ____|            (_)      / __ \\ / ____|",
-    "| (___   __ _ _ __  _ _   _| |  | | (___  ",
-    " \\___ \\ / _` | '_ \\| | | | | |  | |\\___ \\ ",
-    " ____) | (_| | | | | | |_| | |__| |____) |",
-    "|_____/ \\__,_|_| |_|_|\\__,_|\\____/|_____/ ",
+    "  ____                         ___  ____  ",
+    " / ___|  ___  _ __ ___   __ _ / _ \\/ ___| ",
+    " \\___ \\ / _ \\| '_ ` _ \\ / _` | | | \\___ \\ ",
+    "  ___) | (_) | | | | | | (_| | |_| |___) |",
+    " |____/ \\___/|_| |_| |_|\\__,_|\\___/|____/ ",
 ];
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -44,7 +43,7 @@ pub fn print_logo(console: &mut dyn Console) {
     for line in STARTUP_LOGO {
         console.write_line(line);
     }
-    console.write_line("Secure. Fast. Yours.");
+    console.write_line("Human. Private. Yours.");
     console.write_line("");
 }
 
@@ -55,7 +54,7 @@ pub fn print_stage(console: &mut dyn Console, stage: StartupStage, active: bool)
 
 pub fn print_failure(console: &mut dyn Console, code: &str, message: &str) {
     console.write_line("");
-    console.write_line("SANJUOS STARTUP FAILURE");
+    console.write_line("SOMA OS STARTUP FAILURE");
     console.write_str("Code: ");
     console.write_line(code);
     console.write_str("Reason: ");
@@ -78,11 +77,11 @@ mod tests {
     }
 
     #[test]
-    fn startup_prints_sanjuos_brand() {
+    fn startup_prints_soma_os_brand() {
         let mut console = RecordingConsole::default();
         print_logo(&mut console);
         print_stage(&mut console, StartupStage::Userspace, true);
-        assert!(console.0.contains("Secure. Fast. Yours."));
+        assert!(console.0.contains("Human. Private. Yours."));
         assert!(console.0.contains("[OK] Protected userspace"));
     }
 }

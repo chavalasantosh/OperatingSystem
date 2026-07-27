@@ -3,6 +3,7 @@
 
 pub mod block;
 pub mod boot_info;
+pub mod cache;
 pub mod capabilities;
 pub mod elf;
 pub mod fs;
@@ -18,6 +19,7 @@ pub mod scheduler;
 pub mod shell;
 pub mod startup;
 pub mod syscall;
+pub mod vfs;
 
 /// Minimal output boundary used before the full device and logging stacks exist.
 pub trait Console {
@@ -126,7 +128,7 @@ impl M4Report {
 #[allow(clippy::too_many_lines)]
 pub fn kernel_main(console: &mut dyn Console, boot_info: BootInfo, report: M4Report) {
     console.write_line("");
-    console.write_line("SanjuOS");
+    console.write_line("Soma OS");
     console.write_line(boot_info.milestone());
     console.write_str("Architecture: ");
     console.write_line(boot_info.architecture());
@@ -274,7 +276,7 @@ impl M5Report {
 #[allow(clippy::too_many_lines)]
 pub fn kernel_main_m5(console: &mut dyn Console, boot_info: BootInfo, report: M5Report) {
     startup::print_logo(console);
-    console.write_line("SanjuOS M5");
+    console.write_line("Soma OS M5");
     console.write_line(boot_info.milestone());
     console.write_str("Architecture: ");
     console.write_line(boot_info.architecture());
@@ -282,7 +284,7 @@ pub fn kernel_main_m5(console: &mut dyn Console, boot_info: BootInfo, report: M5
     console.write_line(boot_info.firmware());
     write_state(
         console,
-        "SanjuOS page-table ownership",
+        "Soma OS page-table ownership",
         report.paging_ownership_active,
     );
     console.write_str("Active page-table root: 0x");
@@ -375,7 +377,7 @@ pub fn kernel_main_m5(console: &mut dyn Console, boot_info: BootInfo, report: M5
         "Branded startup experience",
         report.startup_experience_active,
     );
-    write_state(console, "SanjuOS logo print", report.sanjuos_brand_printed);
+    write_state(console, "Soma OS logo print", report.sanjuos_brand_printed);
 
     if report.gate_passed() {
         console.write_line("M5 protected user-space gate: passed");
@@ -433,7 +435,7 @@ pub fn kernel_main_foundation_hardening(
     report: FoundationHardeningReport,
 ) {
     console.write_line("");
-    console.write_line("SanjuOS Foundation Hardening");
+    console.write_line("Soma OS Foundation Hardening");
     console.write_line(if report.toolchain_pinned {
         "Pinned toolchain: verified"
     } else {
@@ -563,7 +565,7 @@ pub fn kernel_main_foundation_hardening_phase2(
     report: FoundationHardeningPhase2Report,
 ) {
     console.write_line("");
-    console.write_line("SanjuOS Foundation Hardening Phase 2");
+    console.write_line("Soma OS Foundation Hardening Phase 2");
     console.write_line(if report.virtual_memory_layout_frozen {
         "Virtual-memory layout: frozen"
     } else {
@@ -577,7 +579,7 @@ pub fn kernel_main_foundation_hardening_phase2(
     console.write_str("Inherited page-table root: 0x");
     write_hex_u64(console, report.old_page_table_root);
     console.write_line("");
-    console.write_str("SanjuOS page-table root: 0x");
+    console.write_str("Soma OS page-table root: 0x");
     write_hex_u64(console, report.new_page_table_root);
     console.write_line("");
     console.write_str("Inherited page-table frames reserved: ");
@@ -586,10 +588,10 @@ pub fn kernel_main_foundation_hardening_phase2(
     console.write_str("Physical window mapped bytes: ");
     console.write_u64(report.mapped_physical_bytes);
     console.write_line("");
-    console.write_str("SanjuOS page-table frames used: ");
+    console.write_str("Soma OS page-table frames used: ");
     console.write_usize(report.page_table_frames_used);
     console.write_line("");
-    write_state(console, "Fresh SanjuOS PML4", report.fresh_pml4_active);
+    write_state(console, "Fresh Soma OS PML4", report.fresh_pml4_active);
     console.write_line(if report.inherited_root_retired {
         "Inherited firmware page tables: retired"
     } else {
@@ -712,7 +714,7 @@ pub fn kernel_main_foundation_hardening_phase3(
     report: FoundationHardeningPhase3Report,
 ) {
     console.write_line("");
-    console.write_line("SanjuOS Foundation Hardening Phase 3");
+    console.write_line("Soma OS Foundation Hardening Phase 3");
     write_state(
         console,
         "Private process CR3 roots",
@@ -819,7 +821,7 @@ impl M6aReport {
 /// Prints the M6A hardware-discovery acceptance report.
 pub fn kernel_main_m6a(console: &mut dyn Console, report: M6aReport) {
     console.write_line("");
-    console.write_line("SanjuOS M6A PCI and Storage Discovery");
+    console.write_line("Soma OS M6A PCI and Storage Discovery");
     write_state(
         console,
         "PCI configuration mechanism #1",
@@ -910,7 +912,7 @@ impl M6bReport {
 /// Prints the M6B hardware block-I/O acceptance report.
 pub fn kernel_main_m6b(console: &mut dyn Console, report: M6bReport) {
     console.write_line("");
-    console.write_line("SanjuOS M6B Virtio Block Transport");
+    console.write_line("Soma OS M6B Virtio Block Transport");
     write_state(
         console,
         "Architecture-independent block-device API",
@@ -983,6 +985,136 @@ pub fn kernel_main_m6b(console: &mut dyn Console, report: M6bReport) {
     }
 }
 
+/// Runtime evidence for the M6C bounded cache and VFS gate.
+#[allow(clippy::struct_excessive_bools)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct M6cReport {
+    pub block_cache_active: bool,
+    pub cache_capacity_entries: usize,
+    pub first_read_miss_passed: bool,
+    pub repeat_read_hit_passed: bool,
+    pub cached_data_consistent: bool,
+    pub read_only_dirty_policy_active: bool,
+    pub rejected_cache_writes: u64,
+    pub dirty_cache_entries: usize,
+    pub vfs_contracts_active: bool,
+    pub mount_table_active: bool,
+    pub mounts: usize,
+    pub ramfs_adapter_active: bool,
+    pub path_normalization_passed: bool,
+    pub traversal_bounds_passed: bool,
+    pub user_handle_table_active: bool,
+    pub stale_handle_rejection_passed: bool,
+    pub persistent_writes_disabled: bool,
+    pub m6b_regression_passed: bool,
+}
+
+impl M6cReport {
+    #[must_use]
+    pub const fn gate_passed(self) -> bool {
+        self.block_cache_active
+            && self.cache_capacity_entries > 0
+            && self.first_read_miss_passed
+            && self.repeat_read_hit_passed
+            && self.cached_data_consistent
+            && self.read_only_dirty_policy_active
+            && self.rejected_cache_writes > 0
+            && self.dirty_cache_entries == 0
+            && self.vfs_contracts_active
+            && self.mount_table_active
+            && self.mounts > 0
+            && self.ramfs_adapter_active
+            && self.path_normalization_passed
+            && self.traversal_bounds_passed
+            && self.user_handle_table_active
+            && self.stale_handle_rejection_passed
+            && self.persistent_writes_disabled
+            && self.m6b_regression_passed
+    }
+}
+
+/// Prints the M6C cache and virtual-filesystem acceptance report.
+pub fn kernel_main_m6c(console: &mut dyn Console, report: M6cReport) {
+    console.write_line("");
+    console.write_line("Soma OS M6C Cache and Virtual Filesystem");
+    write_state(
+        console,
+        "Fixed-capacity block cache",
+        report.block_cache_active,
+    );
+    console.write_str("Block cache capacity sectors: ");
+    console.write_usize(report.cache_capacity_entries);
+    console.write_line("");
+    console.write_line(if report.first_read_miss_passed {
+        "Cache first-read miss test: passed"
+    } else {
+        "Cache first-read miss test: failed"
+    });
+    console.write_line(if report.repeat_read_hit_passed {
+        "Cache repeat-read hit test: passed"
+    } else {
+        "Cache repeat-read hit test: failed"
+    });
+    console.write_line(if report.cached_data_consistent {
+        "Cached data consistency test: passed"
+    } else {
+        "Cached data consistency test: failed"
+    });
+    write_state(
+        console,
+        "Read-only dirty-state policy",
+        report.read_only_dirty_policy_active,
+    );
+    console.write_str("Rejected cache writes: ");
+    console.write_u64(report.rejected_cache_writes);
+    console.write_line("");
+    console.write_str("Dirty cache entries: ");
+    console.write_usize(report.dirty_cache_entries);
+    console.write_line("");
+    write_state(console, "VFS contracts", report.vfs_contracts_active);
+    write_state(console, "Bounded mount table", report.mount_table_active);
+    console.write_str("Mounted filesystems: ");
+    console.write_usize(report.mounts);
+    console.write_line("");
+    write_state(console, "RAMFS VFS adapter", report.ramfs_adapter_active);
+    console.write_line(if report.path_normalization_passed {
+        "Absolute-path normalization test: passed"
+    } else {
+        "Absolute-path normalization test: failed"
+    });
+    console.write_line(if report.traversal_bounds_passed {
+        "Path traversal bounds test: passed"
+    } else {
+        "Path traversal bounds test: failed"
+    });
+    write_state(
+        console,
+        "Generation-protected user handle table",
+        report.user_handle_table_active,
+    );
+    console.write_line(if report.stale_handle_rejection_passed {
+        "Stale file-handle rejection test: passed"
+    } else {
+        "Stale file-handle rejection test: failed"
+    });
+    console.write_line(if report.persistent_writes_disabled {
+        "Persistent storage writes: disabled"
+    } else {
+        "Persistent storage writes: unsafe"
+    });
+    console.write_line(if report.m6b_regression_passed {
+        "M6B regression under M6C: passed"
+    } else {
+        "M6B regression under M6C: failed"
+    });
+    if report.gate_passed() {
+        console.write_line("M6C cache and VFS gate: passed");
+        console.write_line("Next gate: validated read-only FAT32 mounting and persistent reads");
+    } else {
+        console.write_line("M6C cache and VFS gate: failed");
+    }
+}
+
 fn write_hex_u64(console: &mut dyn Console, value: u64) {
     for shift in (0..16).rev() {
         let nibble = u8::try_from((value >> (shift * 4)) & 0x0f).unwrap_or(0);
@@ -1007,9 +1139,10 @@ fn write_state(console: &mut dyn Console, label: &str, active: bool) {
 mod tests {
     use super::{
         BootInfo, Console, FoundationHardeningPhase2Report, FoundationHardeningPhase3Report,
-        FoundationHardeningReport, M4Report, M5Report, M6aReport, M6bReport, MemoryMapInfo,
-        kernel_main, kernel_main_foundation_hardening, kernel_main_foundation_hardening_phase2,
-        kernel_main_foundation_hardening_phase3, kernel_main_m5, kernel_main_m6a, kernel_main_m6b,
+        FoundationHardeningReport, M4Report, M5Report, M6aReport, M6bReport, M6cReport,
+        MemoryMapInfo, kernel_main, kernel_main_foundation_hardening,
+        kernel_main_foundation_hardening_phase2, kernel_main_foundation_hardening_phase3,
+        kernel_main_m5, kernel_main_m6a, kernel_main_m6b, kernel_main_m6c,
     };
     use std::string::String;
 
@@ -1297,6 +1430,60 @@ mod tests {
     }
 
     #[test]
+    fn m6c_banner_requires_clean_read_only_cache_and_vfs_evidence() {
+        let mut console = RecordingConsole::default();
+        let report = M6cReport {
+            block_cache_active: true,
+            cache_capacity_entries: 16,
+            first_read_miss_passed: true,
+            repeat_read_hit_passed: true,
+            cached_data_consistent: true,
+            read_only_dirty_policy_active: true,
+            rejected_cache_writes: 1,
+            dirty_cache_entries: 0,
+            vfs_contracts_active: true,
+            mount_table_active: true,
+            mounts: 1,
+            ramfs_adapter_active: true,
+            path_normalization_passed: true,
+            traversal_bounds_passed: true,
+            user_handle_table_active: true,
+            stale_handle_rejection_passed: true,
+            persistent_writes_disabled: true,
+            m6b_regression_passed: true,
+        };
+        kernel_main_m6c(&mut console, report);
+        assert!(report.gate_passed());
+        assert!(
+            !M6cReport {
+                dirty_cache_entries: 1,
+                ..report
+            }
+            .gate_passed()
+        );
+        assert!(
+            console
+                .output
+                .contains("Soma OS M6C Cache and Virtual Filesystem\r\n")
+        );
+        assert!(
+            console
+                .output
+                .contains("Generation-protected user handle table: active\r\n")
+        );
+        assert!(
+            console
+                .output
+                .contains("Persistent storage writes: disabled\r\n")
+        );
+        assert!(
+            console
+                .output
+                .contains("M6C cache and VFS gate: passed\r\n")
+        );
+    }
+
+    #[test]
     fn m5_banner_confirms_protected_userspace_gate() {
         let mut console = RecordingConsole::default();
         let info = BootInfo::new(
@@ -1307,11 +1494,11 @@ mod tests {
         )
         .unwrap();
         kernel_main_m5(&mut console, info, sample_m5_report());
-        assert!(console.output.contains("SanjuOS M5\r\n"));
+        assert!(console.output.contains("Soma OS M5\r\n"));
         assert!(
             console
                 .output
-                .contains("SanjuOS page-table ownership: active\r\n")
+                .contains("Soma OS page-table ownership: active\r\n")
         );
         assert!(console.output.contains("Ring 3 execution: active\r\n"));
         assert!(console.output.contains("System-call interface: active\r\n"));

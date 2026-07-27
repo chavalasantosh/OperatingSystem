@@ -1638,7 +1638,7 @@ extern "efiapi" fn sanju_user_fault_dispatch(vector: u64, error_code: u64, fault
         SANJU_USER_FAULTED = 1;
         SANJU_USER_EXIT_REQUESTED = 1;
     }
-    debug_write_line("SanjuOS: isolated user exception");
+    debug_write_line("Soma OS: isolated user exception");
     debug_write_label_hex("User PID: ", CURRENT_USER_PID.load(Ordering::Relaxed));
     debug_write_label_hex("Vector: ", vector);
     debug_write_label_hex("Error code: ", error_code);

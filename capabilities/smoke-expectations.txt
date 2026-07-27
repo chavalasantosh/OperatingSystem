@@ -7,7 +7,7 @@ Physical ownership map: active
 Frame allocation/free test: passed
 Page-table bootstrap pool: active
 Four-level hardware mapper: active
-Fresh SanjuOS PML4: active
+Fresh Soma OS PML4: active
 Physical direct map: active
 Kernel W^X policy: enforced
 Hardware guard-hole probe: active
@@ -20,3 +20,6 @@ PCI configuration mechanism #1: active
 Virtio block PCI target: active
 Architecture-independent block-device API: active
 M6B block transport gate: passed
+Fixed-capacity block cache: active
+VFS contracts: active
+Generation-protected user handle table: active

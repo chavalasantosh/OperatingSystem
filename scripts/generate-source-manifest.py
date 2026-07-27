@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Generate or verify SanjuOS's canonical source-integrity manifest."""
+"""Generate or verify Soma OS's canonical source-integrity manifest."""
 
 from __future__ import annotations
 
@@ -68,7 +68,7 @@ def main() -> int:
     if args.check:
         if not MANIFEST.exists() or MANIFEST.read_text(encoding="utf-8") != rendered:
             raise SystemExit("SOURCE_MANIFEST.sha256 is out of date")
-        print("SanjuOS source manifest is current.")
+        print("Soma OS source manifest is current.")
         return 0
 
     MANIFEST.write_text(rendered, encoding="utf-8", newline="\n")
