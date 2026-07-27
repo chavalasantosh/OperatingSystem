@@ -1,4 +1,4 @@
-registry_version = 5
+registry_version = 6
 
 [[capability]]
 id = "SYS-TC-001"
@@ -74,12 +74,12 @@ required_boot_line = "Four-level hardware mapper: active"
 
 [[capability]]
 id = "MEM-CR3-001"
-name = "Fresh SanjuOS-owned PML4 and CR3 transition"
+name = "Fresh Soma OS-owned PML4 and CR3 transition"
 status = "hardware_active"
 milestone = "foundation-hardening-2"
 evidence = ["boot/uefi/src/arch/x86_64/paging.rs", "scripts/smoke-test.sh"]
-boot_label = "Fresh SanjuOS PML4"
-required_boot_line = "Fresh SanjuOS PML4: active"
+boot_label = "Fresh Soma OS PML4"
+required_boot_line = "Fresh Soma OS PML4: active"
 
 [[capability]]
 id = "MEM-DMAP-001"
@@ -230,12 +230,31 @@ boot_label = "Virtio block transport"
 required_boot_line = "M6B block transport gate: passed"
 
 [[capability]]
+id = "STOR-CACHE-001"
+name = "Bounded read-only block cache"
+status = "verified"
+milestone = "m6c"
+evidence = ["kernel/src/cache.rs", "boot/uefi/src/main.rs", "scripts/smoke-test.sh"]
+boot_label = "Fixed-capacity block cache"
+required_boot_line = "Fixed-capacity block cache: active"
+
+[[capability]]
 id = "VFS-CORE-001"
 name = "VFS inode, mount, path, and handle contracts"
-status = "planned"
+status = "verified"
 milestone = "m6c"
-evidence = ["docs/process/SPRINT_M6_STORAGE_FOUNDATION.md"]
-boot_label = "Virtual filesystem"
+evidence = ["kernel/src/vfs.rs", "kernel/src/fs.rs", "boot/uefi/src/main.rs", "scripts/smoke-test.sh"]
+boot_label = "Virtual filesystem contracts"
+required_boot_line = "VFS contracts: active"
+
+[[capability]]
+id = "VFS-HANDLE-001"
+name = "Generation-protected bounded user file handles"
+status = "verified"
+milestone = "m6c"
+evidence = ["kernel/src/vfs.rs", "boot/uefi/src/main.rs", "scripts/smoke-test.sh"]
+boot_label = "User file handles"
+required_boot_line = "Generation-protected user handle table: active"
 
 [[capability]]
 id = "FS-FAT32-001"

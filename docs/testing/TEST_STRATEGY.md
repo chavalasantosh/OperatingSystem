@@ -20,6 +20,9 @@
 - exact attached-device topology for hardware-driver milestones;
 - seeded read and reversible disposable-sector write for M6B;
 - block out-of-bounds, status, reset, and timeout failure paths;
+- live first-miss/repeat-hit cache evidence with one underlying device read;
+- explicit write rejection and zero-dirty-entry evidence for M6C;
+- bounded path, mount-prefix, RAMFS adapter, handle-capacity, and stale-handle tests;
 - every previously accepted milestone rerun as a regression gate.
 
 ## Future gates

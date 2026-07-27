@@ -1,6 +1,6 @@
 # ADR 0012: PCI and Storage Foundation
 
-- Status: Accepted; M6B transport decision recorded
+- Status: Accepted; M6B transport accepted and M6C delegated to ADR 0013
 - Date: 2026-07-26
 
 ## Context
@@ -38,7 +38,8 @@ MSI/MSI-X, DMA allocator, block layer, or persistent filesystem yet.
 9. Interrupt-driven completion, indirect descriptors, multiple outstanding
    requests, MSI-X, and explicit uncached MMIO mappings remain later transport
    work.
-10. M6C will add bounded buffer-cache and VFS contracts without disk writes.
+10. M6C adds bounded buffer-cache and VFS contracts without disk writes, as
+    specified by ADR 0013.
 11. M6D will mount a read-only FAT32 volume on the dedicated second disk. The
    EFI system partition is never used for filesystem experiments.
 12. Persistent writes require a later gate with device identity, bounds checks,

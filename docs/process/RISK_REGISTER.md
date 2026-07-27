@@ -18,3 +18,5 @@
 | R-014 | Malformed PCI topology overflows fixed discovery state | Medium | High | bounded inventory/bridge queue and fail-closed completeness gate |
 | R-015 | DMA or block writes corrupt memory or persistent media | Medium | Critical | owned DMA page, fixed chains, identity/bounds/status/timeouts, disposable sector restoration |
 | R-016 | Untrusted virtio PCI capabilities redirect register access | Medium | Critical | bounded capability traversal, validated BAR references and region offsets, exact-width access |
+| R-017 | Cache eviction loses or silently exposes dirty persistent data | Medium | Critical | M6C rejects every cache write before transport and gates on zero dirty entries |
+| R-018 | Path or stale-handle confusion crosses a filesystem boundary | Medium | High | canonical bounded paths, component-aware mounts, and generation-protected handles |

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Generate SanjuOS capability data, documentation, and smoke expectations."""
+"""Generate Soma OS capability data, documentation, and smoke expectations."""
 
 from __future__ import annotations
 
@@ -70,7 +70,7 @@ def render_rust(version: int, entries: list[dict[str, object]]) -> str:
 
 def render_docs(version: int, entries: list[dict[str, object]]) -> str:
     lines = [
-        "# SanjuOS Capability Matrix",
+        "# Soma OS Capability Matrix",
         "",
         f"Registry version: **{version}**",
         "",
@@ -128,7 +128,7 @@ def main() -> int:
     valid = all(write_or_check(path, content, args.check) for path, content in outputs)
     if valid:
         action = "verified" if args.check else "generated"
-        print(f"SanjuOS capability registry {action}: {len(entries)} entries")
+        print(f"Soma OS capability registry {action}: {len(entries)} entries")
         return 0
     return 1
 

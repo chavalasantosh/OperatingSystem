@@ -27,7 +27,7 @@ Exit criteria:
 
 ## M6B — block transport
 
-Status: implementation candidate; QEMU acceptance required.
+Status: accepted as `v0.0.10-m6b`.
 
 - [x] block-device trait and sector geometry contract;
 - [x] PCI BAR and modern virtio capability parsing;
@@ -36,7 +36,7 @@ Status: implementation candidate; QEMU acceptance required.
 - [x] bounded single-sector read and write against a disposable test disk;
 - [x] restore the original disposable sector after the write probe;
 - [x] timeout, reset, unsupported-feature, bounds, and status error handling;
-- [ ] pass the pinned-toolchain headless QEMU smoke gate.
+- [x] pass the pinned-toolchain headless QEMU smoke gate.
 
 Exit criteria:
 
@@ -47,11 +47,30 @@ Exit criteria:
 
 ## M6C — buffer cache and VFS
 
-- fixed-capacity block cache with explicit dirty-state policy;
-- inode, superblock, mount, path, and file-handle types;
-- absolute-path normalization and traversal bounds;
-- RAMFS adapted behind the VFS contract;
-- user handle table design without enabling persistent writes.
+Status: implementation candidate; QEMU acceptance required.
+
+- [x] 16-sector, allocation-free, read-through LRU block cache;
+- [x] hard read-only dirty-state policy that rejects writes before transport;
+- [x] failed reads preserve existing cache contents;
+- [x] inode, superblock, mount, path, and file-handle types;
+- [x] canonical absolute-path normalization with bounded root traversal;
+- [x] fixed mount table with component-boundary longest-prefix resolution;
+- [x] generation-protected, fixed-capacity user handle table;
+- [x] RAMFS adapted behind the VFS contract;
+- [x] live virtio first-miss/repeat-hit cache probe;
+- [x] `cache` and `mounts` shell diagnostics;
+- [ ] pass the pinned-toolchain headless QEMU smoke gate.
+
+Exit criteria:
+
+- one live sector read produces exactly one miss and one device request;
+- repeating the read produces one hit without another device request;
+- cached bytes equal the hardware-read bytes;
+- an attempted cache write is rejected and leaves zero dirty entries;
+- path normalization cannot escape root or exceed traversal bounds;
+- RAMFS files resolve and read through VFS inode and handle contracts;
+- a closed generation-tagged handle is rejected as stale;
+- M6B and every earlier regression gate remains passed.
 
 ## M6D — read-only FAT32
 

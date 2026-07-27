@@ -4,7 +4,7 @@ SHELL := /usr/bin/env bash
 
 help:
 	@printf '%s\n' \
-	  'SanjuOS developer commands:' \
+	  'Soma OS developer commands:' \
 	  '  make setup   Install the Rust target used by the UEFI loader' \
 	  '  make source-check  Validate critical source and UEFI ABI invariants' \
 	  '  make user-programs  Rebuild the embedded Ring 3 ELF programs' \

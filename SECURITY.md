@@ -1,6 +1,6 @@
 # Security Policy
 
-SanjuOS is pre-alpha research software and must not be used to protect sensitive data or replace a production operating system.
+Soma OS is pre-alpha research software and must not be used to protect sensitive data or replace a production operating system.
 
 ## Reporting
 

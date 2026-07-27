@@ -6,7 +6,7 @@
 UEFI firmware
     |
     v
-SanjuOS UEFI boot layer
+Soma OS UEFI boot layer
     - validates firmware tables
     - captures memory and platform information (M1)
     - loads kernel image (later)
@@ -93,7 +93,7 @@ transition window is intentional rather than an accidental firmware dependency.
 ## Foundation Hardening Phase 3 process runtime
 
 ```text
-SanjuOS kernel CR3
+Soma OS kernel CR3
     -> sanitized private root per process
        -> explicit Ring 3 image/data/stack pages
        -> supervisor kernel/direct-map pages
@@ -137,3 +137,14 @@ allocator frame contains the descriptor table, available ring, used ring,
 request header, sector buffer, and status byte. The transport permits one
 bounded synchronous request at a time; M6C may consume only the block-device
 contract, not the x86 PCI adapter.
+
+M6C wraps that contract in a 16-entry read-through LRU cache. Its only
+dirty-state policy rejects writes before transport, so no entry can become
+dirty. A failed read is staged separately and cannot destroy an existing cache
+entry.
+
+The VFS layer defines fixed inode, superblock, mount, path, directory, and
+generation-tagged handle contracts. Paths are absolute and canonical with
+bounded depth; mount selection observes component boundaries. RAMFS is the only
+active backend and remains volatile. M6D will attach a read-only FAT32 backend
+without importing PCI or virtio types into filesystem code.

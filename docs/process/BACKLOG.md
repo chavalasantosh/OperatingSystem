@@ -17,7 +17,7 @@
 - User pointer validation and eight-call syscall ABI.
 - Process/address-space/context models and timer-quantum evidence.
 - ELF64 PIE loader and three embedded user programs.
-- Branded startup, error codes, SanjuOS ASCII output, and graphical logo asset.
+- Branded startup, error codes, historical ASCII output, and graphical logo asset.
 
 ## Foundation Hardening Phase 1 — accepted (`v0.0.6-fh1`)
 
@@ -29,7 +29,7 @@
 
 - Frozen x86-64 virtual-memory layout.
 - Complete inherited page-table reservation.
-- Fresh SanjuOS-owned PML4 and safe CR3 transition.
+- Fresh OS-owned PML4 and safe CR3 transition.
 - Physical direct map and hardware map/translate/protect/unmap API.
 - PE-section W^X permissions and real kernel guard holes.
 - M5 and FH1 regression preservation.
@@ -49,15 +49,20 @@
 - QEMU virtio-blk target discovery.
 - Shell PCI diagnostics.
 
-## M6B — Virtio Block Transport — in development
+## M6B — Virtio Block Transport — accepted (`v0.0.10-m6b`)
 
 - Block-device abstraction and polling virtio-blk transport.
 - Dedicated disk identity, known-sector read, and confined write/restore gate.
 
-## M6C through M6D — Storage and VFS Foundation
+## M6C — Bounded Cache and VFS — implementation ready for CI
 
-- Buffer cache and asynchronous I/O contracts.
-- VFS inode, mount, path, and file-handle model.
+- Fixed-capacity read-through cache with a hard no-dirty-data policy.
+- VFS inode, superblock, mount, canonical path, and file-handle contracts.
+- RAMFS adapter and generation-protected bounded user handles.
+- Live first-miss/repeat-hit hardware evidence and shell diagnostics.
+
+## M6D — Read-Only Persistent Filesystem
+
 - Read-only FAT32 persistent filesystem prototype.
 - User VFS handles and executable spawning after the kernel VFS gate.
 

@@ -5,7 +5,8 @@
 use core::str;
 
 use crate::Console;
-use crate::fs::{FsError, RamFs};
+use crate::fs::{MAX_FILE_BYTES, RamFs};
+use crate::vfs::{HandleRights, MAX_PATH_BYTES, Vfs, VfsError};
 
 const COMMAND_BUFFER_BYTES: usize = 128;
 
@@ -27,6 +28,15 @@ pub struct ShellEnvironment {
     pub block_queue_size: usize,
     pub block_read_test_passed: bool,
     pub block_write_test_passed: bool,
+    pub cache_capacity: usize,
+    pub cache_hits: u64,
+    pub cache_misses: u64,
+    pub cache_device_reads: u64,
+    pub cache_dirty_entries: usize,
+    pub cache_read_only_policy: bool,
+    pub vfs_mounts: usize,
+    pub vfs_handle_capacity: usize,
+    pub vfs_path_normalization_passed: bool,
 }
 
 /// Interactive line editor and command dispatcher.
@@ -50,7 +60,7 @@ impl Shell {
     /// Prints the shell banner and first prompt.
     pub fn start(console: &mut dyn Console) {
         console.write_line("");
-        console.write_line("SanjuOS kernel shell ready.");
+        console.write_line("Soma OS kernel shell ready.");
         console.write_line("Type 'help' for commands.");
         write_prompt(console);
     }
@@ -60,7 +70,7 @@ impl Shell {
         &mut self,
         byte: u8,
         console: &mut dyn Console,
-        fs: &mut RamFs,
+        vfs: &mut Vfs<RamFs>,
         environment: &ShellEnvironment,
     ) {
         match byte {
@@ -74,7 +84,7 @@ impl Shell {
                 if let Ok(line) = str::from_utf8(&command_copy[..command_len])
                     && !line.trim().is_empty()
                 {
-                    execute_line(line.trim(), console, fs, environment);
+                    execute_line(line.trim(), console, vfs, environment);
                     self.commands_executed = self.commands_executed.saturating_add(1);
                 }
                 write_prompt(console);
@@ -119,7 +129,7 @@ impl Default for Shell {
 fn execute_line(
     line: &str,
     console: &mut dyn Console,
-    fs: &mut RamFs,
+    vfs: &mut Vfs<RamFs>,
     environment: &ShellEnvironment,
 ) {
     let mut parts = line.split_whitespace();
@@ -130,11 +140,11 @@ fn execute_line(
     match command {
         "help" => {
             console.write_line(concat!(
-                "Commands: help version uptime memory irq tasks pci block ls cat write echo ",
-                "clear userspace",
+                "Commands: help version uptime memory irq tasks pci block cache mounts ls cat ",
+                "write echo clear userspace",
             ));
         }
-        "version" => console.write_line("SanjuOS 0.0.10-prealpha (M6B)"),
+        "version" => console.write_line("Soma OS 0.0.11-prealpha (M6C)"),
         "uptime" => {
             console.write_str("Timer ticks: ");
             console.write_u64(environment.timer_ticks);
@@ -190,21 +200,81 @@ fn execute_line(
                 "failed"
             });
         }
-        "ls" => {
-            if fs.file_count() == 0 {
-                console.write_line("<empty>");
+        "cache" => {
+            console.write_str("Block cache: ");
+            console.write_usize(environment.cache_capacity);
+            console.write_str(" sectors, hits ");
+            console.write_u64(environment.cache_hits);
+            console.write_str(", misses ");
+            console.write_u64(environment.cache_misses);
+            console.write_str(", device reads ");
+            console.write_u64(environment.cache_device_reads);
+            console.write_str(", dirty ");
+            console.write_usize(environment.cache_dirty_entries);
+            console.write_str(", policy ");
+            console.write_line(if environment.cache_read_only_policy {
+                "read-only"
             } else {
-                fs.visit_names(|name| console.write_line(name));
+                "unverified"
+            });
+        }
+        "mounts" => {
+            console.write_str("VFS mounts: ");
+            console.write_usize(environment.vfs_mounts);
+            console.write_str(", handle capacity: ");
+            console.write_usize(environment.vfs_handle_capacity);
+            console.write_str(", normalized paths: ");
+            console.write_line(if environment.vfs_path_normalization_passed {
+                "active"
+            } else {
+                "inactive"
+            });
+            vfs.mounts().visit(|mount| {
+                console.write_str(mount.path.as_str());
+                console.write_str(" ");
+                console.write_str(mount.superblock.filesystem_name);
+                console.write_str(" ");
+                console.write_line(if mount.superblock.read_only {
+                    "read-only"
+                } else {
+                    "read-write"
+                });
+            });
+        }
+        "ls" => {
+            let mut found = false;
+            let result = vfs.visit_directory("/", &mut |name, _inode| {
+                found = true;
+                console.write_line(name);
+            });
+            if result.is_err() {
+                console.write_line("filesystem error");
+            } else if !found {
+                console.write_line("<empty>");
             }
         }
         "cat" => {
-            let Some(name) = parts.next() else {
+            let Some(input_path) = parts.next() else {
                 console.write_line("usage: cat <file>");
                 return;
             };
-            match fs.read(name) {
-                Ok(data) => write_bytes(console, data),
-                Err(FsError::NotFound) => console.write_line("file not found"),
+            let mut path_storage = [0_u8; MAX_PATH_BYTES];
+            let Some(path) = shell_path(input_path, &mut path_storage) else {
+                console.write_line("invalid path");
+                return;
+            };
+            match vfs.open(path, HandleRights::ReadOnly) {
+                Ok(handle) => {
+                    let mut data = [0_u8; MAX_FILE_BYTES];
+                    let read_result = vfs.read(handle, &mut data);
+                    let close_result = vfs.close(handle);
+                    match (read_result, close_result) {
+                        (Ok(read), Ok(())) => write_bytes(console, &data[..read]),
+                        _ => console.write_line("filesystem error"),
+                    }
+                }
+                Err(VfsError::NotFound) => console.write_line("file not found"),
+                Err(VfsError::Path(_)) => console.write_line("invalid path"),
                 Err(_) => console.write_line("filesystem error"),
             }
         }
@@ -219,11 +289,17 @@ fn execute_line(
                 console.write_line("usage: write <file> <text>");
                 return;
             };
-            match fs.write(name, data.as_bytes()) {
-                Ok(()) => console.write_line("written"),
-                Err(FsError::NameTooLong) => console.write_line("filename too long"),
-                Err(FsError::DataTooLarge) => console.write_line("file data too large"),
-                Err(FsError::FileTableFull) => console.write_line("file table full"),
+            let mut path_storage = [0_u8; MAX_PATH_BYTES];
+            let Some(path) = shell_path(name, &mut path_storage) else {
+                console.write_line("invalid path");
+                return;
+            };
+            match vfs.create_or_replace(path, data.as_bytes()) {
+                Ok(_) => console.write_line("written"),
+                Err(VfsError::Path(_)) => console.write_line("invalid path"),
+                Err(VfsError::FileTooLarge) => console.write_line("file data too large"),
+                Err(VfsError::NoSpace) => console.write_line("file table full"),
+                Err(VfsError::ReadOnly) => console.write_line("filesystem is read-only"),
                 Err(_) => console.write_line("filesystem error"),
             }
         }
@@ -240,7 +316,20 @@ fn execute_line(
 }
 
 fn write_prompt(console: &mut dyn Console) {
-    console.write_str("sanju> ");
+    console.write_str("soma> ");
+}
+
+fn shell_path<'a>(input: &'a str, storage: &'a mut [u8; MAX_PATH_BYTES]) -> Option<&'a str> {
+    if input.starts_with('/') {
+        return Some(input);
+    }
+    let required = input.len().checked_add(1)?;
+    if required > storage.len() {
+        return None;
+    }
+    storage[0] = b'/';
+    storage[1..required].copy_from_slice(input.as_bytes());
+    str::from_utf8(&storage[..required]).ok()
 }
 
 fn write_bytes(console: &mut dyn Console, bytes: &[u8]) {
@@ -261,6 +350,7 @@ mod tests {
     use super::{Shell, ShellEnvironment};
     use crate::Console;
     use crate::fs::RamFs;
+    use crate::vfs::Vfs;
     use std::string::String;
 
     #[derive(Default)]
@@ -278,7 +368,7 @@ mod tests {
     fn shell_executes_commands_and_writes_files() {
         let mut shell = Shell::new();
         let mut console = RecordingConsole::default();
-        let mut fs = RamFs::with_defaults();
+        let mut vfs = Vfs::new(RamFs::with_defaults());
         Shell::start(&mut console);
 
         let environment = ShellEnvironment {
@@ -289,10 +379,19 @@ mod tests {
             block_queue_size: 8,
             block_read_test_passed: true,
             block_write_test_passed: true,
+            cache_capacity: 16,
+            cache_hits: 1,
+            cache_misses: 1,
+            cache_device_reads: 1,
+            cache_dirty_entries: 0,
+            cache_read_only_policy: true,
+            vfs_mounts: 1,
+            vfs_handle_capacity: 32,
+            vfs_path_normalization_passed: true,
             ..ShellEnvironment::default()
         };
-        for byte in b"write note.txt hello\ncat note.txt\npci\nblock\n" {
-            shell.feed_byte(*byte, &mut console, &mut fs, &environment);
+        for byte in b"write note.txt hello\ncat note.txt\npci\nblock\ncache\nmounts\n" {
+            shell.feed_byte(*byte, &mut console, &mut vfs, &environment);
         }
 
         assert!(console.output.contains("written\r\n"));
@@ -305,6 +404,10 @@ mod tests {
         assert!(console.output.contains(
             "Virtio block: 16384 sectors, queue 8, read passed, write/readback passed\r\n"
         ));
-        assert_eq!(shell.commands_executed(), 4);
+        assert!(console.output.contains(
+            "Block cache: 16 sectors, hits 1, misses 1, device reads 1, dirty 0, policy read-only\r\n"
+        ));
+        assert!(console.output.contains("/ ramfs read-write\r\n"));
+        assert_eq!(shell.commands_executed(), 6);
     }
 }

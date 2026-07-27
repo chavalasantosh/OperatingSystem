@@ -32,6 +32,8 @@ HEAP = ROOT / "kernel/src/heap.rs"
 PROCESS = ROOT / "kernel/src/process.rs"
 PCI = ROOT / "kernel/src/pci.rs"
 BLOCK = ROOT / "kernel/src/block.rs"
+CACHE = ROOT / "kernel/src/cache.rs"
+VFS = ROOT / "kernel/src/vfs.rs"
 SYSCALL = ROOT / "kernel/src/syscall.rs"
 ELF = ROOT / "kernel/src/elf.rs"
 STARTUP = ROOT / "kernel/src/startup.rs"
@@ -352,6 +354,8 @@ def main() -> int:
     process = PROCESS.read_text(encoding="utf-8")
     pci = PCI.read_text(encoding="utf-8")
     block = BLOCK.read_text(encoding="utf-8")
+    cache = CACHE.read_text(encoding="utf-8")
+    vfs = VFS.read_text(encoding="utf-8")
     syscall = SYSCALL.read_text(encoding="utf-8")
     elf = ELF.read_text(encoding="utf-8")
     startup = STARTUP.read_text(encoding="utf-8")
@@ -381,7 +385,10 @@ def main() -> int:
     require(boot, "kernel_main_m6a", BOOT)
     require(boot, "M6bReport", BOOT)
     require(boot, "kernel_main_m6b", BOOT)
+    require(boot, "M6cReport", BOOT)
+    require(boot, "kernel_main_m6c", BOOT)
     require(boot, "cpu::initialize_virtio_block", BOOT)
+    require(boot, "BlockCache::<_, DEFAULT_CACHE_ENTRIES>::new", BOOT)
     if "core::arch" in boot or "asm!(" in boot or "global_asm!(" in boot:
         raise AssertionError(f"{BOOT}: architecture-specific assembly leaked into main.rs")
     require(cpu, 'asm!("int3"', CPU)
@@ -474,12 +481,25 @@ def main() -> int:
     require(block, "pub trait BlockDevice", BLOCK)
     require(block, "pub struct BlockGeometry", BLOCK)
     require(block, "pub const fn validate_sector_range", BLOCK)
+    require(cache, "pub struct BlockCache", CACHE)
+    require(cache, "pub enum DirtyStatePolicy", CACHE)
+    require(cache, "RejectWrites", CACHE)
+    require(cache, "fn repeat_read_hits_cache_without_second_device_request", CACHE)
+    require(cache, "fn read_only_policy_rejects_write_before_device", CACHE)
+    require(cache, "fn failed_device_read_preserves_existing_cached_entry", CACHE)
+    require(vfs, "pub struct NormalizedPath", VFS)
+    require(vfs, "pub struct Superblock", VFS)
+    require(vfs, "pub struct MountTable", VFS)
+    require(vfs, "pub struct UserHandleTable", VFS)
+    require(vfs, "pub trait FileSystem", VFS)
+    require(vfs, "fn path_normalization_is_absolute_bounded_and_canonical", VFS)
+    require(vfs, "fn ramfs_resolves_and_reads_through_generation_checked_handle", VFS)
     require(syscall, "pub struct SyscallDispatcher", SYSCALL)
     for syscall_name in ("Write", "Read", "Exit", "Yield", "GetPid", "Open", "Close", "Spawn"):
         require(syscall, syscall_name, SYSCALL)
     require(elf, "load_position_independent", ELF)
     require(startup, "STARTUP_LOGO", STARTUP)
-    require(startup, "Secure. Fast. Yours.", STARTUP)
+    require(startup, "Human. Private. Yours.", STARTUP)
     require(boot_info, "pub struct BootInfoV1", BOOT_INFO)
     require(boot_info, "pub struct FramebufferInfo", BOOT_INFO)
     require(boot_info, "pub active_page_table_root: u64", BOOT_INFO)
@@ -495,11 +515,14 @@ def main() -> int:
     ):
         require(ownership, f"fn {test_name}", OWNERSHIP)
     require(capability_registry, "SYS-TC-001", CAPABILITY_REGISTRY)
-    require(capability_registry, 'registry_version = 5', CAPABILITY_REGISTRY)
+    require(capability_registry, 'registry_version = 6', CAPABILITY_REGISTRY)
     require(capability_registry, "PCI-ENUM-001", CAPABILITY_REGISTRY)
     require(capability_registry, "STOR-DISC-001", CAPABILITY_REGISTRY)
     require(capability_registry, "STOR-BLK-001", CAPABILITY_REGISTRY)
     require(capability_registry, "STOR-VIRTIO-001", CAPABILITY_REGISTRY)
+    require(capability_registry, "STOR-CACHE-001", CAPABILITY_REGISTRY)
+    require(capability_registry, "VFS-CORE-001", CAPABILITY_REGISTRY)
+    require(capability_registry, "VFS-HANDLE-001", CAPABILITY_REGISTRY)
     require(capability_registry, "software_model", CAPABILITY_REGISTRY)
     require(toolchain, 'channel = "1.97.0"', TOOLCHAIN)
     require(toolchain, 'components = ["clippy", "rustfmt"]', TOOLCHAIN)
@@ -510,10 +533,12 @@ def main() -> int:
     require(kernel, "pub struct FoundationHardeningPhase3Report", KERNEL)
     require(kernel, "pub struct M6aReport", KERNEL)
     require(kernel, "pub struct M6bReport", KERNEL)
+    require(kernel, "pub struct M6cReport", KERNEL)
     require(kernel, "Foundation hardening phase 1: passed", KERNEL)
     require(kernel, "Foundation hardening phase 3: passed", KERNEL)
     require(kernel, "M6A PCI discovery gate: passed", KERNEL)
     require(kernel, "M6B block transport gate: passed", KERNEL)
+    require(kernel, "M6C cache and VFS gate: passed", KERNEL)
     require(kernel, "Ring 3 execution", KERNEL)
     require(kernel, "M5 protected user-space gate: passed", KERNEL)
     require(
@@ -530,6 +555,8 @@ def main() -> int:
     require(smoke, "serial=SANJU-M6B", SMOKE)
     require(smoke, "M6B block transport gate: passed", SMOKE)
     require(smoke, "Disposable sector restoration: passed", SMOKE)
+    require(smoke, "M6C cache and VFS gate: passed", SMOKE)
+    require(smoke, "Persistent storage writes: disabled", SMOKE)
     for executable in (INIT_ELF, HELLO_ELF, FAULT_ELF):
         validate_elf64(executable)
     if LOGO.read_bytes()[:8] != b"\x89PNG\r\n\x1a\n":
@@ -583,7 +610,7 @@ def main() -> int:
             )
     validate_source_manifest()
 
-    print("SanjuOS M6B virtio-block transport source checks passed.")
+    print("Soma OS M6C cache and VFS source checks passed.")
     print("UEFI memory descriptor base size: 40 bytes")
     print("UEFI GOP mode-information size: 36 bytes")
     print("UEFI GOP mode size: 40 bytes")

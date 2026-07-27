@@ -36,4 +36,4 @@ for program in init hello fault-test; do
     -o "user/programs/bin/${program}.elf"
 done
 
-echo "Built SanjuOS M5 user programs."
+echo "Built Soma OS M5 user programs."

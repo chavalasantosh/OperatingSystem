@@ -21,5 +21,5 @@ _start:
     ud2
 .section .rodata
 message:
-    .ascii "init: SanjuOS protected userspace online\n"
+    .ascii "init: Soma OS protected userspace online\n"
 .set message_len, . - message

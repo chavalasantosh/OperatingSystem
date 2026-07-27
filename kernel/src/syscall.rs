@@ -418,7 +418,7 @@ mod tests {
 
     #[test]
     fn dispatcher_validates_user_pointers_and_file_descriptors() {
-        let message = b"SanjuOS";
+        let message = b"Soma OS";
         let name = b"welcome.txt";
         let mut memory = UserMemory::new();
         assert!(memory.add_region(message.as_ptr().addr(), message.len(), true, false));
