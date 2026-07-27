@@ -74,7 +74,11 @@
 - bounded PCI device and bus inventories fail closed on overflow;
 - x86 configuration transactions are serialized on the bootstrap CPU;
 - M6A performs discovery only and cannot issue block requests;
-- M6B uses a disposable, explicitly identified second QEMU disk;
+- M6B requires the dedicated QEMU disk identity before its acceptance I/O;
+- M6B uses allocator-owned DMA memory, fixed descriptor chains, sector bounds,
+  device status checks, and a finite polling limit;
+- the sole M6B write target is a disposable sector whose original bytes are
+  restored before the acceptance gate passes;
 - filesystem work begins read-only with geometry and bounds validation;
 - persistent writes remain blocked until reboot, corruption, and recovery gates
   are implemented.

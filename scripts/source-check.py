@@ -15,6 +15,7 @@ BOOT = ROOT / "boot/uefi/src/main.rs"
 CPU = ROOT / "boot/uefi/src/arch/x86_64/mod.rs"
 HARDWARE_PAGING = ROOT / "boot/uefi/src/arch/x86_64/paging.rs"
 HARDWARE_PCI = ROOT / "boot/uefi/src/arch/x86_64/pci.rs"
+HARDWARE_VIRTIO_BLOCK = ROOT / "boot/uefi/src/arch/x86_64/virtio_block.rs"
 KERNEL = ROOT / "kernel/src/lib.rs"
 BOOT_INFO = ROOT / "kernel/src/boot_info.rs"
 OWNERSHIP = ROOT / "kernel/src/ownership.rs"
@@ -30,6 +31,7 @@ PAGING = ROOT / "kernel/src/paging.rs"
 HEAP = ROOT / "kernel/src/heap.rs"
 PROCESS = ROOT / "kernel/src/process.rs"
 PCI = ROOT / "kernel/src/pci.rs"
+BLOCK = ROOT / "kernel/src/block.rs"
 SYSCALL = ROOT / "kernel/src/syscall.rs"
 ELF = ROOT / "kernel/src/elf.rs"
 STARTUP = ROOT / "kernel/src/startup.rs"
@@ -333,6 +335,7 @@ def main() -> int:
     cpu = CPU.read_text(encoding="utf-8")
     hardware_paging = HARDWARE_PAGING.read_text(encoding="utf-8")
     hardware_pci = HARDWARE_PCI.read_text(encoding="utf-8")
+    hardware_virtio_block = HARDWARE_VIRTIO_BLOCK.read_text(encoding="utf-8")
     kernel = KERNEL.read_text(encoding="utf-8")
     boot_info = BOOT_INFO.read_text(encoding="utf-8")
     ownership = OWNERSHIP.read_text(encoding="utf-8")
@@ -348,6 +351,7 @@ def main() -> int:
     heap = HEAP.read_text(encoding="utf-8")
     process = PROCESS.read_text(encoding="utf-8")
     pci = PCI.read_text(encoding="utf-8")
+    block = BLOCK.read_text(encoding="utf-8")
     syscall = SYSCALL.read_text(encoding="utf-8")
     elf = ELF.read_text(encoding="utf-8")
     startup = STARTUP.read_text(encoding="utf-8")
@@ -375,6 +379,9 @@ def main() -> int:
     require(boot, "cpu::discover_pci", BOOT)
     require(boot, "M6aReport", BOOT)
     require(boot, "kernel_main_m6a", BOOT)
+    require(boot, "M6bReport", BOOT)
+    require(boot, "kernel_main_m6b", BOOT)
+    require(boot, "cpu::initialize_virtio_block", BOOT)
     if "core::arch" in boot or "asm!(" in boot or "global_asm!(" in boot:
         raise AssertionError(f"{BOOT}: architecture-specific assembly leaked into main.rs")
     require(cpu, 'asm!("int3"', CPU)
@@ -421,6 +428,15 @@ def main() -> int:
     require(hardware_pci, "CONFIG_ADDRESS_PORT", HARDWARE_PCI)
     require(hardware_pci, "configuration_mechanism_one_available", HARDWARE_PCI)
     require(hardware_pci, "read_config_u32", HARDWARE_PCI)
+    require(hardware_pci, "pub(super) struct PciConfigSession", HARDWARE_PCI)
+    require(hardware_virtio_block, "VIRTIO_F_VERSION_1_HIGH", HARDWARE_VIRTIO_BLOCK)
+    require(hardware_virtio_block, "VIRTIO_PCI_CAP_PCI_CFG", HARDWARE_VIRTIO_BLOCK)
+    require(hardware_virtio_block, "struct DmaQueue", HARDWARE_VIRTIO_BLOCK)
+    require(hardware_virtio_block, "VIRTIO_BLK_T_GET_ID", HARDWARE_VIRTIO_BLOCK)
+    require(hardware_virtio_block, "EXPECTED_READ_PATTERN", HARDWARE_VIRTIO_BLOCK)
+    require(hardware_virtio_block, "DISPOSABLE_WRITE_SECTOR", HARDWARE_VIRTIO_BLOCK)
+    require(hardware_virtio_block, "validate_sector_range", HARDWARE_VIRTIO_BLOCK)
+    require(hardware_virtio_block, "BlockError::Timeout", HARDWARE_VIRTIO_BLOCK)
     require(memory, "pub struct FrameAllocator", MEMORY)
     require(memory, "pub struct FrameBitmap", MEMORY)
     require(memory, "pub fn free_frame", MEMORY)
@@ -452,8 +468,12 @@ def main() -> int:
     require(pci, "pub struct PciInventory", PCI)
     require(pci, "pub struct PciDevice", PCI)
     require(pci, "StorageControllerKind::VirtioBlock", PCI)
+    require(pci, "pub fn decode_bar", PCI)
     if "asm!(" in pci or "0x0cf8" in pci or "0x0cfc" in pci:
         raise AssertionError(f"{PCI}: architecture-specific PCI access leaked into kernel")
+    require(block, "pub trait BlockDevice", BLOCK)
+    require(block, "pub struct BlockGeometry", BLOCK)
+    require(block, "pub const fn validate_sector_range", BLOCK)
     require(syscall, "pub struct SyscallDispatcher", SYSCALL)
     for syscall_name in ("Write", "Read", "Exit", "Yield", "GetPid", "Open", "Close", "Spawn"):
         require(syscall, syscall_name, SYSCALL)
@@ -475,9 +495,11 @@ def main() -> int:
     ):
         require(ownership, f"fn {test_name}", OWNERSHIP)
     require(capability_registry, "SYS-TC-001", CAPABILITY_REGISTRY)
-    require(capability_registry, 'registry_version = 4', CAPABILITY_REGISTRY)
+    require(capability_registry, 'registry_version = 5', CAPABILITY_REGISTRY)
     require(capability_registry, "PCI-ENUM-001", CAPABILITY_REGISTRY)
     require(capability_registry, "STOR-DISC-001", CAPABILITY_REGISTRY)
+    require(capability_registry, "STOR-BLK-001", CAPABILITY_REGISTRY)
+    require(capability_registry, "STOR-VIRTIO-001", CAPABILITY_REGISTRY)
     require(capability_registry, "software_model", CAPABILITY_REGISTRY)
     require(toolchain, 'channel = "1.97.0"', TOOLCHAIN)
     require(toolchain, 'components = ["clippy", "rustfmt"]', TOOLCHAIN)
@@ -487,9 +509,11 @@ def main() -> int:
     require(kernel, "pub struct FoundationHardeningReport", KERNEL)
     require(kernel, "pub struct FoundationHardeningPhase3Report", KERNEL)
     require(kernel, "pub struct M6aReport", KERNEL)
+    require(kernel, "pub struct M6bReport", KERNEL)
     require(kernel, "Foundation hardening phase 1: passed", KERNEL)
     require(kernel, "Foundation hardening phase 3: passed", KERNEL)
     require(kernel, "M6A PCI discovery gate: passed", KERNEL)
+    require(kernel, "M6B block transport gate: passed", KERNEL)
     require(kernel, "Ring 3 execution", KERNEL)
     require(kernel, "M5 protected user-space gate: passed", KERNEL)
     require(
@@ -502,6 +526,10 @@ def main() -> int:
     require(setup, "rustup override set 1.97.0", SETUP)
     require(smoke, "virtio-blk-pci", SMOKE)
     require(smoke, "M6A PCI discovery gate: passed", SMOKE)
+    require(smoke, "SANJUOS-M6B-READ-PATTERN", SMOKE)
+    require(smoke, "serial=SANJU-M6B", SMOKE)
+    require(smoke, "M6B block transport gate: passed", SMOKE)
+    require(smoke, "Disposable sector restoration: passed", SMOKE)
     for executable in (INIT_ELF, HELLO_ELF, FAULT_ELF):
         validate_elf64(executable)
     if LOGO.read_bytes()[:8] != b"\x89PNG\r\n\x1a\n":
@@ -555,7 +583,7 @@ def main() -> int:
             )
     validate_source_manifest()
 
-    print("SanjuOS M6A PCI and storage-discovery source checks passed.")
+    print("SanjuOS M6B virtio-block transport source checks passed.")
     print("UEFI memory descriptor base size: 40 bytes")
     print("UEFI GOP mode-information size: 36 bytes")
     print("UEFI GOP mode size: 40 bytes")

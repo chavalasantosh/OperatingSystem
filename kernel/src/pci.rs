@@ -2,6 +2,101 @@
 
 pub const MAX_PCI_DEVICES: usize = 64;
 
+/// Address-space type encoded by one PCI base-address register.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum PciBarKind {
+    Io,
+    Memory32,
+    Memory64,
+}
+
+/// Decoded, firmware-assigned PCI base-address register.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct PciBar {
+    pub index: u8,
+    pub kind: PciBarKind,
+    pub base_address: u64,
+    pub prefetchable: bool,
+}
+
+/// Invalid or unsupported BAR encoding.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum PciBarError {
+    InvalidIndex,
+    MissingUpperHalf,
+    ReservedMemoryType,
+    Unassigned,
+}
+
+/// Decodes one firmware-assigned BAR without modifying PCI configuration.
+///
+/// The returned boolean is true when a 64-bit BAR consumes `index + 1`.
+///
+/// # Errors
+///
+/// Returns [`PciBarError`] for reserved, truncated, or unassigned encodings.
+pub fn decode_bar(index: u8, low: u32, upper: Option<u32>) -> Result<(PciBar, bool), PciBarError> {
+    if index >= 6 {
+        return Err(PciBarError::InvalidIndex);
+    }
+    if low & 1 != 0 {
+        let base_address = u64::from(low & !0x03);
+        if base_address == 0 {
+            return Err(PciBarError::Unassigned);
+        }
+        return Ok((
+            PciBar {
+                index,
+                kind: PciBarKind::Io,
+                base_address,
+                prefetchable: false,
+            },
+            false,
+        ));
+    }
+
+    let prefetchable = low & 0x08 != 0;
+    match (low >> 1) & 0x03 {
+        0 => {
+            let base_address = u64::from(low & !0x0f);
+            if base_address == 0 {
+                return Err(PciBarError::Unassigned);
+            }
+            Ok((
+                PciBar {
+                    index,
+                    kind: PciBarKind::Memory32,
+                    base_address,
+                    prefetchable,
+                },
+                false,
+            ))
+        }
+        2 => {
+            if index == 5 {
+                return Err(PciBarError::MissingUpperHalf);
+            }
+            let Some(upper) = upper else {
+                return Err(PciBarError::MissingUpperHalf);
+            };
+            let base_address = (u64::from(upper) << 32) | u64::from(low & !0x0f);
+            if base_address == 0 {
+                return Err(PciBarError::Unassigned);
+            }
+            Ok((
+                PciBar {
+                    index,
+                    kind: PciBarKind::Memory64,
+                    base_address,
+                    prefetchable,
+                },
+                true,
+            ))
+        }
+        _ => Err(PciBarError::ReservedMemoryType),
+    }
+}
+
 /// One PCI bus/device/function address.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub struct PciAddress {
@@ -179,8 +274,8 @@ impl Default for PciInventory {
 #[cfg(test)]
 mod tests {
     use super::{
-        MAX_PCI_DEVICES, PciAddress, PciDevice, PciInventory, PciInventoryError,
-        StorageControllerKind,
+        MAX_PCI_DEVICES, PciAddress, PciBar, PciBarError, PciBarKind, PciDevice, PciInventory,
+        PciInventoryError, StorageControllerKind, decode_bar,
     };
 
     fn device(
@@ -221,6 +316,39 @@ mod tests {
         assert!(PciAddress::new(255, 31, 7).is_some());
         assert!(PciAddress::new(0, 32, 0).is_none());
         assert!(PciAddress::new(0, 0, 8).is_none());
+    }
+
+    #[test]
+    fn decodes_memory_and_io_bars_without_configuration_writes() {
+        assert_eq!(
+            decode_bar(0, 0x0000_c001, None),
+            Ok((
+                PciBar {
+                    index: 0,
+                    kind: PciBarKind::Io,
+                    base_address: 0xc000,
+                    prefetchable: false,
+                },
+                false,
+            ))
+        );
+        assert_eq!(
+            decode_bar(2, 0x9000_000c, Some(1)),
+            Ok((
+                PciBar {
+                    index: 2,
+                    kind: PciBarKind::Memory64,
+                    base_address: 0x0000_0001_9000_0000,
+                    prefetchable: true,
+                },
+                true,
+            ))
+        );
+        assert_eq!(
+            decode_bar(5, 0x0000_0004, None),
+            Err(PciBarError::MissingUpperHalf)
+        );
+        assert_eq!(decode_bar(0, 0, None), Err(PciBarError::Unassigned));
     }
 
     #[test]

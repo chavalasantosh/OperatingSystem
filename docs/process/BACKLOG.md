@@ -42,16 +42,20 @@
 - Timer-driven process preemption and CR3/TSS switching.
 - Blocking, wakeup, and deterministic page-table resource reclamation.
 
-## M6A — PCI and Storage Discovery — in development
+## M6A — PCI and Storage Discovery — accepted (`v0.0.9-m6a`)
 
 - PCI enumeration and driver matching.
 - Bounded multifunction and bridge-aware inventory.
 - QEMU virtio-blk target discovery.
 - Shell PCI diagnostics.
 
-## M6B through M6D — Storage and VFS Foundation
+## M6B — Virtio Block Transport — in development
 
 - Block-device abstraction and polling virtio-blk transport.
+- Dedicated disk identity, known-sector read, and confined write/restore gate.
+
+## M6C through M6D — Storage and VFS Foundation
+
 - Buffer cache and asynchronous I/O contracts.
 - VFS inode, mount, path, and file-handle model.
 - Read-only FAT32 persistent filesystem prototype.

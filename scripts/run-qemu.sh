@@ -25,6 +25,8 @@ mkdir -p build
 if [[ ! -f build/sanju-storage.img ]]; then
   truncate -s 64M build/sanju-storage.img
 fi
+printf '%s' 'SANJUOS-M6B-READ-PATTERN' |
+  dd of=build/sanju-storage.img bs=1 seek=$((8 * 512)) conv=notrunc status=none
 
 qemu-system-x86_64 \
   -machine q35,accel=tcg \
@@ -34,7 +36,7 @@ qemu-system-x86_64 \
   -drive if=pflash,format=raw,file="$OVMF_VARS_COPY" \
   -drive format=raw,file=fat:rw:build/esp \
   -drive if=none,id=sanju-storage,format=raw,file=build/sanju-storage.img \
-  -device virtio-blk-pci,drive=sanju-storage,serial=SANJU-M6A \
+  -device virtio-blk-pci,drive=sanju-storage,serial=SANJU-M6B \
   -serial stdio \
   -no-reboot \
   -no-shutdown

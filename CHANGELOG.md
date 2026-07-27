@@ -1,5 +1,21 @@
 # Changelog
 
+## M6B Virtio Block Transport candidate — 2026-07-26
+
+- Architecture-independent 512-byte sector block-device contract.
+- Validated I/O, 32-bit, and 64-bit PCI BAR decoding.
+- Modern virtio PCI common, notify, device, and configuration-window parsing.
+- `VIRTIO_F_VERSION_1` negotiation and fail-closed device initialization.
+- Allocator-owned, direct-mapped split virtqueue with one outstanding request.
+- Polling read, write, and device-ID requests with status/reset/timeout errors.
+- Dedicated disk identity verification and known-sector read evidence.
+- Disposable-sector write/readback followed by restoration of original bytes.
+- Sector-boundary rejection and `block` shell diagnostics.
+- Capability registry version 5 and full M5/FH1/FH2/FH3/M6A regressions.
+
+M6B does not mount a filesystem or expose general-purpose persistent writes.
+Buffer caching and VFS contracts remain M6C; read-only FAT32 remains M6D.
+
 ## M6A PCI and Storage Discovery candidate — 2026-07-26
 
 - Architecture-independent PCI identity and storage classification.

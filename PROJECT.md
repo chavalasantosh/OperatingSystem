@@ -6,9 +6,9 @@
 - Architecture: x86-64
 - Firmware: UEFI 2.x
 - Primary language: Rust 2024
-- Accepted checkpoint: Foundation Hardening Phase 3
-- Immutable release: `v0.0.8-fh3`
-- Current development checkpoint: M6A PCI and storage discovery
+- Accepted checkpoint: M6A PCI and Storage Discovery
+- Immutable release: `v0.0.9-m6a`
+- Current development checkpoint: M6B virtio block transport
 - Deployment policy: QEMU only until physical-install safety gates pass
 
 ## Mission
@@ -21,11 +21,12 @@ Development is grouped into major milestone batches. Small formatting or CI corr
 
 ## Current objective
 
-Enumerate the QEMU PCI topology through hardware configuration transactions,
-retain a bounded device inventory, and match a dedicated virtio block target
-without issuing disk I/O.
+Activate the dedicated QEMU virtio block target behind an
+architecture-independent sector contract. Validate modern PCI capabilities,
+feature negotiation, DMA queue ownership, a known-sector read, and a confined
+write/readback/restore transaction.
 
 ## Next major objective
 
-Add a polling virtio-blk transport and architecture-independent block-device
-API after M6A passes QEMU.
+Add a fixed-capacity block cache and VFS contracts without enabling persistent
+filesystem writes.

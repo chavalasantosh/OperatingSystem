@@ -1,6 +1,7 @@
 #![cfg_attr(not(test), no_std)]
 #![allow(clippy::pedantic)]
 
+pub mod block;
 pub mod boot_info;
 pub mod capabilities;
 pub mod elf;
@@ -864,6 +865,124 @@ pub fn kernel_main_m6a(console: &mut dyn Console, report: M6aReport) {
     }
 }
 
+/// Runtime evidence for the M6B virtio block-transport gate.
+#[allow(clippy::struct_excessive_bools)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct M6bReport {
+    pub block_device_api_active: bool,
+    pub modern_pci_capabilities_active: bool,
+    pub pci_bars_parsed: usize,
+    pub pci_bus_master_active: bool,
+    pub feature_negotiation_active: bool,
+    pub dma_queue_active: bool,
+    pub queue_size: u16,
+    pub capacity_sectors: u64,
+    pub dedicated_device_identity_verified: bool,
+    pub known_sector_read_passed: bool,
+    pub disposable_sector_write_readback_passed: bool,
+    pub disposable_sector_restored: bool,
+    pub bounds_check_passed: bool,
+    pub timeout_protection_active: bool,
+    pub m6a_regression_passed: bool,
+}
+
+impl M6bReport {
+    #[must_use]
+    pub const fn gate_passed(self) -> bool {
+        self.block_device_api_active
+            && self.modern_pci_capabilities_active
+            && self.pci_bars_parsed > 0
+            && self.pci_bus_master_active
+            && self.feature_negotiation_active
+            && self.dma_queue_active
+            && self.queue_size >= 3
+            && self.capacity_sectors > 16
+            && self.dedicated_device_identity_verified
+            && self.known_sector_read_passed
+            && self.disposable_sector_write_readback_passed
+            && self.disposable_sector_restored
+            && self.bounds_check_passed
+            && self.timeout_protection_active
+            && self.m6a_regression_passed
+    }
+}
+
+/// Prints the M6B hardware block-I/O acceptance report.
+pub fn kernel_main_m6b(console: &mut dyn Console, report: M6bReport) {
+    console.write_line("");
+    console.write_line("SanjuOS M6B Virtio Block Transport");
+    write_state(
+        console,
+        "Architecture-independent block-device API",
+        report.block_device_api_active,
+    );
+    write_state(
+        console,
+        "Modern virtio PCI capabilities",
+        report.modern_pci_capabilities_active,
+    );
+    console.write_str("PCI BARs parsed: ");
+    console.write_usize(report.pci_bars_parsed);
+    console.write_line("");
+    write_state(console, "PCI bus mastering", report.pci_bus_master_active);
+    write_state(
+        console,
+        "Virtio feature negotiation",
+        report.feature_negotiation_active,
+    );
+    write_state(console, "DMA-safe split virtqueue", report.dma_queue_active);
+    console.write_str("Virtio request queue size: ");
+    console.write_u64(u64::from(report.queue_size));
+    console.write_line("");
+    console.write_str("Block capacity sectors: ");
+    console.write_u64(report.capacity_sectors);
+    console.write_line("");
+    console.write_str("Block capacity bytes: ");
+    console.write_u64(report.capacity_sectors.saturating_mul(512));
+    console.write_line("");
+    console.write_line(if report.dedicated_device_identity_verified {
+        "Dedicated storage identity: verified"
+    } else {
+        "Dedicated storage identity: failed"
+    });
+    console.write_line(if report.known_sector_read_passed {
+        "Known sector read test: passed"
+    } else {
+        "Known sector read test: failed"
+    });
+    console.write_line(if report.disposable_sector_write_readback_passed {
+        "Disposable sector write/readback test: passed"
+    } else {
+        "Disposable sector write/readback test: failed"
+    });
+    console.write_line(if report.disposable_sector_restored {
+        "Disposable sector restoration: passed"
+    } else {
+        "Disposable sector restoration: failed"
+    });
+    console.write_line(if report.bounds_check_passed {
+        "Block bounds rejection test: passed"
+    } else {
+        "Block bounds rejection test: failed"
+    });
+    write_state(
+        console,
+        "Block request timeout protection",
+        report.timeout_protection_active,
+    );
+    console.write_line(if report.m6a_regression_passed {
+        "M6A regression under M6B: passed"
+    } else {
+        "M6A regression under M6B: failed"
+    });
+    if report.gate_passed() {
+        console.write_line("M6B block transport gate: passed");
+        console.write_line("Next gate: bounded buffer cache and virtual filesystem contracts");
+    } else {
+        console.write_line("M6B block transport gate: failed");
+    }
+}
+
 fn write_hex_u64(console: &mut dyn Console, value: u64) {
     for shift in (0..16).rev() {
         let nibble = u8::try_from((value >> (shift * 4)) & 0x0f).unwrap_or(0);
@@ -888,9 +1007,9 @@ fn write_state(console: &mut dyn Console, label: &str, active: bool) {
 mod tests {
     use super::{
         BootInfo, Console, FoundationHardeningPhase2Report, FoundationHardeningPhase3Report,
-        FoundationHardeningReport, M4Report, M5Report, M6aReport, MemoryMapInfo, kernel_main,
-        kernel_main_foundation_hardening, kernel_main_foundation_hardening_phase2,
-        kernel_main_foundation_hardening_phase3, kernel_main_m5, kernel_main_m6a,
+        FoundationHardeningReport, M4Report, M5Report, M6aReport, M6bReport, MemoryMapInfo,
+        kernel_main, kernel_main_foundation_hardening, kernel_main_foundation_hardening_phase2,
+        kernel_main_foundation_hardening_phase3, kernel_main_m5, kernel_main_m6a, kernel_main_m6b,
     };
     use std::string::String;
 
@@ -1128,6 +1247,52 @@ mod tests {
             console
                 .output
                 .contains("M6A PCI discovery gate: passed\r\n")
+        );
+    }
+
+    #[test]
+    fn m6b_banner_requires_safe_sector_io_and_m6a_regression() {
+        let mut console = RecordingConsole::default();
+        let report = M6bReport {
+            block_device_api_active: true,
+            modern_pci_capabilities_active: true,
+            pci_bars_parsed: 2,
+            pci_bus_master_active: true,
+            feature_negotiation_active: true,
+            dma_queue_active: true,
+            queue_size: 8,
+            capacity_sectors: 16_384,
+            dedicated_device_identity_verified: true,
+            known_sector_read_passed: true,
+            disposable_sector_write_readback_passed: true,
+            disposable_sector_restored: true,
+            bounds_check_passed: true,
+            timeout_protection_active: true,
+            m6a_regression_passed: true,
+        };
+        kernel_main_m6b(&mut console, report);
+        assert!(report.gate_passed());
+        assert!(
+            !M6bReport {
+                disposable_sector_restored: false,
+                ..report
+            }
+            .gate_passed()
+        );
+        assert!(
+            console
+                .output
+                .contains("Architecture-independent block-device API: active\r\n")
+        );
+        assert!(
+            console
+                .output
+                .contains("Disposable sector write/readback test: passed\r\n")
+        );
+        assert!(
+            console
+                .output
+                .contains("M6B block transport gate: passed\r\n")
         );
     }
 

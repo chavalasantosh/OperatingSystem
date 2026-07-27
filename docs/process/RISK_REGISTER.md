@@ -16,4 +16,5 @@
 | R-012 | Legacy PIT/PIC results do not generalize to SMP | High | High | explicit single-core boundary; APIC/SMP remains a separate milestone |
 | R-013 | PCI enumeration races configuration access | Low | High | single-CPU ownership and interrupt serialization during M6A |
 | R-014 | Malformed PCI topology overflows fixed discovery state | Medium | High | bounded inventory/bridge queue and fail-closed completeness gate |
-| R-015 | DMA or block writes corrupt memory or persistent media | Medium | Critical | separate M6B gate, disposable second disk, bounds/timeouts, no M6A I/O |
+| R-015 | DMA or block writes corrupt memory or persistent media | Medium | Critical | owned DMA page, fixed chains, identity/bounds/status/timeouts, disposable sector restoration |
+| R-016 | Untrusted virtio PCI capabilities redirect register access | Medium | Critical | bounded capability traversal, validated BAR references and region offsets, exact-width access |

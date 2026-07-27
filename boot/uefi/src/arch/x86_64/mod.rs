@@ -3,6 +3,7 @@
 pub(crate) mod paging;
 mod pci;
 mod serial;
+mod virtio_block;
 
 #[cfg(feature = "qemu-test")]
 pub mod qemu;
@@ -14,6 +15,7 @@ pub(crate) use paging::{
 };
 pub(crate) use pci::discover_pci;
 pub use serial::SerialConsole;
+pub(crate) use virtio_block::initialize_and_probe as initialize_virtio_block;
 
 use core::arch::{asm, global_asm};
 use core::mem::size_of;

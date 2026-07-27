@@ -129,3 +129,11 @@ Raw configuration and future device-register access stay in the x86-64
 adapter. PCI identity, block contracts, cache policy, VFS types, and filesystem
 validation remain architecture-independent. The EFI system partition is not a
 storage-development target.
+
+M6B selects the single discovered virtio-blk function, validates its BAR and
+vendor-capability topology, and uses the standardized PCI configuration-access
+window for modern common, notify, and device registers. One direct-mapped
+allocator frame contains the descriptor table, available ring, used ring,
+request header, sector buffer, and status byte. The transport permits one
+bounded synchronous request at a time; M6C may consume only the block-device
+contract, not the x86 PCI adapter.

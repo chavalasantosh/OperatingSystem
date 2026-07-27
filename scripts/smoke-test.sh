@@ -23,6 +23,8 @@ STORAGE_IMAGE="$(mktemp /tmp/sanjuos-storage.XXXXXX.img)"
 trap 'rm -f "$OVMF_VARS_COPY" "$STORAGE_IMAGE"' EXIT
 cp "$OVMF_VARS_TEMPLATE" "$OVMF_VARS_COPY"
 truncate -s 8M "$STORAGE_IMAGE"
+printf '%s' 'SANJUOS-M6B-READ-PATTERN' |
+  dd of="$STORAGE_IMAGE" bs=1 seek=$((8 * 512)) conv=notrunc status=none
 mkdir -p build
 rm -f build/qemu-debug.log
 
@@ -35,7 +37,7 @@ timeout 20s qemu-system-x86_64 \
   -drive if=pflash,format=raw,file="$OVMF_VARS_COPY" \
   -drive format=raw,file=fat:rw:build/smoke-esp \
   -drive if=none,id=sanju-storage,format=raw,file="$STORAGE_IMAGE" \
-  -device virtio-blk-pci,drive=sanju-storage,serial=SANJU-M6A \
+  -device virtio-blk-pci,drive=sanju-storage,serial=SANJU-M6B \
   -display none \
   -serial none \
   -monitor none \
@@ -97,9 +99,24 @@ grep -Fq "Virtio block PCI target: active" build/qemu-debug.log
 grep -Fq "Storage driver target: virtio-blk-pci" build/qemu-debug.log
 grep -Fq "FH3 regression under M6A: passed" build/qemu-debug.log
 grep -Fq "M6A PCI discovery gate: passed" build/qemu-debug.log
+grep -Fq "SanjuOS M6B Virtio Block Transport" build/qemu-debug.log
+grep -Fq "Architecture-independent block-device API: active" build/qemu-debug.log
+grep -Fq "Modern virtio PCI capabilities: active" build/qemu-debug.log
+grep -Fq "PCI bus mastering: active" build/qemu-debug.log
+grep -Fq "Virtio feature negotiation: active" build/qemu-debug.log
+grep -Fq "DMA-safe split virtqueue: active" build/qemu-debug.log
+grep -Fq "Dedicated storage identity: verified" build/qemu-debug.log
+grep -Fq "Known sector read test: passed" build/qemu-debug.log
+grep -Fq "Disposable sector write/readback test: passed" build/qemu-debug.log
+grep -Fq "Disposable sector restoration: passed" build/qemu-debug.log
+grep -Fq "Block bounds rejection test: passed" build/qemu-debug.log
+grep -Fq "Block request timeout protection: active" build/qemu-debug.log
+grep -Fq "M6A regression under M6B: passed" build/qemu-debug.log
+grep -Fq "M6B block transport gate: passed" build/qemu-debug.log
 grep -Fq "SanjuOS kernel shell ready." build/qemu-debug.log
 grep -Fq "M5 protected userspace, syscalls, and ELF loader are active." build/qemu-debug.log
 grep -Fq "virtio-blk targets: 1" build/qemu-debug.log
+grep -Fq "write/readback passed" build/qemu-debug.log
 
 echo "QEMU smoke test passed."
 cat build/qemu-debug.log
