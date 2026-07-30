@@ -1,4 +1,4 @@
-registry_version = 6
+registry_version = 7
 
 [[capability]]
 id = "SYS-TC-001"
@@ -259,7 +259,15 @@ required_boot_line = "Generation-protected user handle table: active"
 [[capability]]
 id = "FS-FAT32-001"
 name = "Read-only FAT32 persistent filesystem"
-status = "planned"
+status = "hardware_active"
 milestone = "m6d"
-evidence = ["docs/process/SPRINT_M6_STORAGE_FOUNDATION.md"]
+evidence = [
+    "kernel/src/fat32.rs",
+    "kernel/src/vfs.rs",
+    "boot/uefi/src/main.rs",
+    "scripts/create-fat32-image.py",
+    "scripts/smoke-test.sh",
+    "docs/testing/M6D_FAT32_VALIDATION.md",
+]
 boot_label = "FAT32 filesystem"
+required_boot_line = "M6D read-only FAT32 gate: passed"

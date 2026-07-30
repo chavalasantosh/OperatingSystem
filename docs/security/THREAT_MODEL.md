@@ -88,7 +88,14 @@
 - mount resolution checks component boundaries and uses the longest prefix;
 - user file handles include generations so closed identifiers cannot alias a
   reused slot;
-- filesystem work begins read-only with geometry and bounds validation;
+- FAT32 mounting validates BPB geometry, FAT capacity, FSInfo signatures, the
+  complete backup boot sector, root cluster, and device bounds;
+- FAT and directory walks reject free, reserved, bad, out-of-range, premature,
+  overlong, and cyclic chains within a fixed traversal budget;
+- long filenames require a complete ordinal sequence, matching short-name
+  checksum, valid UTF-16, and a VFS-bounded component;
+- the persistent backend and cache both reject writes and the M6D gate requires
+  zero dirty entries after all acceptance reads;
 - persistent writes remain blocked until reboot, corruption, and recovery gates
   are implemented.
 

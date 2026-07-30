@@ -1,5 +1,25 @@
 # Changelog
 
+## M6D Read-Only FAT32 candidate — 2026-07-30
+
+- Added an allocation-free FAT32 backend over the architecture-independent
+  block-device contract.
+- Validated BPB geometry, FAT capacity, device bounds, FSInfo signatures, and
+  the complete backup boot sector before mounting.
+- Added bounded cluster traversal with free, reserved, bad, out-of-range,
+  premature-end, overlong, and cyclic-chain rejection.
+- Added FAT 8.3 and checksum-validated, bounded UTF-16 long-name decoding.
+- Added root, nested-directory, offset, and multi-cluster persistent reads.
+- Mounted FAT32 read-only at `/disk` behind the M6C VFS.
+- Added streaming shell `cat`, path-aware `ls`, and `fat32` diagnostics.
+- Added a deterministic 64 MiB FAT32 QEMU fixture preserving the M6B device
+  identity sector.
+- Advanced the capability registry to version 7 and added exact M6D smoke
+  evidence while preserving M5 through M6C regression gates.
+
+M6D does not expose persistent files to Ring 3, load executables from FAT32,
+write persistent media, discover partitions, or support physical installation.
+
 ## M6C Bounded Cache and VFS candidate — 2026-07-27
 
 - Adopted Soma OS as the temporary user-facing working identity while retaining

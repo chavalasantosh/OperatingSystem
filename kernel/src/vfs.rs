@@ -1,9 +1,9 @@
 #![allow(clippy::module_name_repetitions)]
 
-//! Allocation-free virtual-filesystem contracts for M6C.
+//! Allocation-free virtual-filesystem contracts.
 //!
-//! The first backend is RAMFS. The same inode, mount, path, directory, and
-//! handle contracts form the boundary for the read-only FAT32 backend in M6D.
+//! RAMFS is the writable root. M6D adds one read-only persistent backend while
+//! retaining fixed mount and handle capacities.
 
 use core::str;
 
@@ -234,6 +234,51 @@ pub trait FileSystem {
         inode: InodeId,
         visitor: &mut dyn FnMut(&str, Inode),
     ) -> Result<(), VfsError>;
+}
+
+/// Empty backend used before a secondary filesystem is mounted.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct NoFilesystem;
+
+impl FileSystem for NoFilesystem {
+    fn superblock(&self) -> Superblock {
+        Superblock {
+            filesystem_name: "none",
+            root_inode: InodeId(0),
+            block_size: 0,
+            read_only: true,
+        }
+    }
+
+    fn lookup(&self, _parent: InodeId, _name: &str) -> Result<Inode, VfsError> {
+        Err(VfsError::UnsupportedMount)
+    }
+
+    fn read(
+        &self,
+        _inode: InodeId,
+        _offset: u64,
+        _destination: &mut [u8],
+    ) -> Result<usize, VfsError> {
+        Err(VfsError::UnsupportedMount)
+    }
+
+    fn create_or_replace(
+        &mut self,
+        _parent: InodeId,
+        _name: &str,
+        _data: &[u8],
+    ) -> Result<Inode, VfsError> {
+        Err(VfsError::UnsupportedMount)
+    }
+
+    fn visit_directory(
+        &self,
+        _inode: InodeId,
+        _visitor: &mut dyn FnMut(&str, Inode),
+    ) -> Result<(), VfsError> {
+        Err(VfsError::UnsupportedMount)
+    }
 }
 
 /// Stable identifier for one mount-table entry.
@@ -507,51 +552,84 @@ impl Default for UserHandleTable {
     }
 }
 
-/// Root VFS instance for one concrete backend.
-pub struct Vfs<F: FileSystem> {
-    root: F,
+/// VFS instance with a writable root and at most one secondary backend.
+///
+/// The fixed two-backend shape is intentional for the early storage epoch. It
+/// proves real mount dispatch without allocation or trait-object lifetimes.
+pub struct Vfs<R: FileSystem, M: FileSystem = NoFilesystem> {
+    root: R,
+    secondary: M,
+    secondary_mount: Option<MountId>,
     mounts: MountTable,
     handles: UserHandleTable,
 }
 
-impl<F: FileSystem> Vfs<F> {
+impl<R: FileSystem> Vfs<R, NoFilesystem> {
     #[must_use]
-    pub fn new(root: F) -> Self {
+    pub fn new(root: R) -> Self {
         let mounts = MountTable::with_root(root.superblock());
         Self {
             root,
+            secondary: NoFilesystem,
+            secondary_mount: None,
             mounts,
             handles: UserHandleTable::new(),
         }
     }
 
+    /// Installs one secondary backend and returns the widened VFS type.
+    ///
+    /// # Errors
+    ///
+    /// Returns a path, duplicate, capacity, or busy-state error.
+    pub fn mount<M: FileSystem>(
+        mut self,
+        raw_path: &str,
+        secondary: M,
+    ) -> Result<Vfs<R, M>, VfsError> {
+        if !self.handles.is_empty() {
+            return Err(VfsError::Backend);
+        }
+        let secondary_mount = self.mounts.mount(raw_path, secondary.superblock())?;
+        Ok(Vfs {
+            root: self.root,
+            secondary,
+            secondary_mount: Some(secondary_mount),
+            mounts: self.mounts,
+            handles: self.handles,
+        })
+    }
+}
+
+impl<R: FileSystem, M: FileSystem> Vfs<R, M> {
     /// Resolves one canonical path to inode metadata.
     ///
     /// # Errors
     ///
     /// Returns path, mount, lookup, or type errors from the VFS/backend.
     pub fn resolve(&self, raw_path: &str) -> Result<Inode, VfsError> {
+        self.resolve_with_mount(raw_path).map(|(_, inode)| inode)
+    }
+
+    fn resolve_with_mount(&self, raw_path: &str) -> Result<(Mount, Inode), VfsError> {
         let path = NormalizedPath::parse(raw_path)?;
         let mount = self
             .mounts
             .resolve(&path)
             .ok_or(VfsError::UnsupportedMount)?;
-        if mount.id != MountId(0) {
-            return Err(VfsError::UnsupportedMount);
-        }
 
         let mut inode = Inode {
             id: mount.superblock.root_inode,
             kind: NodeKind::Directory,
             size: 0,
         };
-        for component in path.components() {
+        for component in path.components().skip(mount.path.component_count()) {
             if inode.kind != NodeKind::Directory {
                 return Err(VfsError::NotDirectory);
             }
-            inode = self.root.lookup(inode.id, component)?;
+            inode = self.lookup(mount.id, inode.id, component)?;
         }
-        Ok(inode)
+        Ok((mount, inode))
     }
 
     /// Opens one non-directory object.
@@ -560,17 +638,16 @@ impl<F: FileSystem> Vfs<F> {
     ///
     /// Returns resolution, permission, type, or handle-capacity errors.
     pub fn open(&mut self, raw_path: &str, rights: HandleRights) -> Result<FileHandleId, VfsError> {
-        let inode = self.resolve(raw_path)?;
+        let (mount, inode) = self.resolve_with_mount(raw_path)?;
         if inode.kind == NodeKind::Directory {
             return Err(VfsError::IsDirectory);
         }
-        let superblock = self.root.superblock();
-        if rights == HandleRights::ReadWrite && superblock.read_only {
+        if rights == HandleRights::ReadWrite && mount.superblock.read_only {
             return Err(VfsError::ReadOnly);
         }
         self.handles.open(FileHandle {
             inode: inode.id,
-            mount: MountId(0),
+            mount: mount.id,
             offset: 0,
             rights,
         })
@@ -583,10 +660,7 @@ impl<F: FileSystem> Vfs<F> {
     /// Returns stale-handle, offset, or backend errors.
     pub fn read(&mut self, id: FileHandleId, destination: &mut [u8]) -> Result<usize, VfsError> {
         let handle = *self.handles.get(id)?;
-        if handle.mount != MountId(0) {
-            return Err(VfsError::UnsupportedMount);
-        }
-        let read = self.root.read(handle.inode, handle.offset, destination)?;
+        let read = self.read_backend(handle.mount, handle.inode, handle.offset, destination)?;
         let next_offset = handle
             .offset
             .checked_add(u64::try_from(read).map_err(|_| VfsError::InvalidOffset)?)
@@ -611,15 +685,22 @@ impl<F: FileSystem> Vfs<F> {
     /// Returns path, mount, permission, or backend errors.
     pub fn create_or_replace(&mut self, raw_path: &str, data: &[u8]) -> Result<Inode, VfsError> {
         let path = NormalizedPath::parse(raw_path)?;
+        if self
+            .mounts
+            .resolve(&path)
+            .is_some_and(|mount| mount.id != MountId(0) && mount.path == path)
+        {
+            return Err(VfsError::IsDirectory);
+        }
         let name = path.file_name().ok_or(VfsError::IsDirectory)?;
-        let parent = self.resolve(path.parent().as_str())?;
+        let (mount, parent) = self.resolve_with_mount(path.parent().as_str())?;
         if parent.kind != NodeKind::Directory {
             return Err(VfsError::NotDirectory);
         }
-        if self.root.superblock().read_only {
+        if mount.superblock.read_only {
             return Err(VfsError::ReadOnly);
         }
-        self.root.create_or_replace(parent.id, name, data)
+        self.create_backend(mount.id, parent.id, name, data)
     }
 
     /// Visits one directory through its backend.
@@ -632,11 +713,11 @@ impl<F: FileSystem> Vfs<F> {
         raw_path: &str,
         visitor: &mut dyn FnMut(&str, Inode),
     ) -> Result<(), VfsError> {
-        let inode = self.resolve(raw_path)?;
+        let (mount, inode) = self.resolve_with_mount(raw_path)?;
         if inode.kind != NodeKind::Directory {
             return Err(VfsError::NotDirectory);
         }
-        self.root.visit_directory(inode.id, visitor)
+        self.visit_backend(mount.id, inode.id, visitor)
     }
 
     #[must_use]
@@ -650,8 +731,71 @@ impl<F: FileSystem> Vfs<F> {
     }
 
     #[must_use]
-    pub const fn backend(&self) -> &F {
+    pub const fn backend(&self) -> &R {
         &self.root
+    }
+
+    /// Returns the secondary backend after it has been mounted.
+    #[must_use]
+    pub fn secondary_backend(&self) -> Option<&M> {
+        self.secondary_mount.map(|_| &self.secondary)
+    }
+
+    fn lookup(&self, mount: MountId, parent: InodeId, name: &str) -> Result<Inode, VfsError> {
+        if mount == MountId(0) {
+            return self.root.lookup(parent, name);
+        }
+        if self.secondary_mount == Some(mount) {
+            return self.secondary.lookup(parent, name);
+        }
+        Err(VfsError::UnsupportedMount)
+    }
+
+    fn read_backend(
+        &self,
+        mount: MountId,
+        inode: InodeId,
+        offset: u64,
+        destination: &mut [u8],
+    ) -> Result<usize, VfsError> {
+        if mount == MountId(0) {
+            return self.root.read(inode, offset, destination);
+        }
+        if self.secondary_mount == Some(mount) {
+            return self.secondary.read(inode, offset, destination);
+        }
+        Err(VfsError::UnsupportedMount)
+    }
+
+    fn create_backend(
+        &mut self,
+        mount: MountId,
+        parent: InodeId,
+        name: &str,
+        data: &[u8],
+    ) -> Result<Inode, VfsError> {
+        if mount == MountId(0) {
+            return self.root.create_or_replace(parent, name, data);
+        }
+        if self.secondary_mount == Some(mount) {
+            return self.secondary.create_or_replace(parent, name, data);
+        }
+        Err(VfsError::UnsupportedMount)
+    }
+
+    fn visit_backend(
+        &self,
+        mount: MountId,
+        inode: InodeId,
+        visitor: &mut dyn FnMut(&str, Inode),
+    ) -> Result<(), VfsError> {
+        if mount == MountId(0) {
+            return self.root.visit_directory(inode, visitor);
+        }
+        if self.secondary_mount == Some(mount) {
+            return self.secondary.visit_directory(inode, visitor);
+        }
+        Err(VfsError::UnsupportedMount)
     }
 }
 

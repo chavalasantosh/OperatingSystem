@@ -145,6 +145,12 @@ entry.
 
 The VFS layer defines fixed inode, superblock, mount, path, directory, and
 generation-tagged handle contracts. Paths are absolute and canonical with
-bounded depth; mount selection observes component boundaries. RAMFS is the only
-active backend and remains volatile. M6D will attach a read-only FAT32 backend
-without importing PCI or virtio types into filesystem code.
+bounded depth; mount selection observes component boundaries. RAMFS remains the
+writable root.
+
+M6D mounts one allocation-free FAT32 backend at `/disk`. It consumes the cached
+block-device contract, validates the complete volume geometry before trusting
+offsets, and bounds every FAT and directory traversal by the verified cluster
+count. The backend decodes short names and bounded checksum-validated UTF-16
+long names, supports nested and multi-cluster reads, and cannot issue writes.
+Filesystem code imports no PCI or virtio implementation types.

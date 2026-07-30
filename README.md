@@ -9,9 +9,9 @@ milestones before any physical-disk work.
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Ask DeepWiki](https://deepwiki.com/badge.svg)](https://deepwiki.com/chavalasantosh/OperatingSystem)
 
-## Current checkpoint: M6C Bounded Cache and VFS
+## Current checkpoint: M6D Read-Only FAT32
 
-The accepted baseline entering this phase is `v0.0.10-m6b`. M0 through FH2
+The accepted baseline entering this phase is M6C. M0 through FH2
 proved UEFI ownership transfer, protected kernel
 execution, interrupts, Ring 3 entry, `SYSCALL`/`SYSRET`, ELF64 loading,
 recoverable user faults, physical ownership, and a fresh Soma OS page-table
@@ -65,10 +65,23 @@ M6C builds the filesystem boundary without enabling persistent writes:
 - RAMFS accessed through the same VFS interface reserved for FAT32;
 - `cache` and `mounts` shell diagnostics plus exact smoke evidence.
 
+M6D activates persistent reads through that boundary:
+
+- a deterministic 64 MiB FAT32 image attached as the dedicated virtio device;
+- validated BPB geometry, FAT capacity, FSInfo, backup boot sector, and device
+  bounds;
+- bounded FAT-chain traversal with malformed-cluster and cycle rejection;
+- short-name and checksum-validated UTF-16 long-filename decoding;
+- root, nested-directory, offset, and multi-cluster file reads;
+- a second VFS mount at `/disk` with read-only enforcement;
+- cache-backed persistent reads with zero dirty entries;
+- `fat32`, path-aware `ls`, and persistent streaming `cat` shell diagnostics;
+- exact QEMU evidence preserving every M5 through M6C regression gate.
+
 ## Shell commands
 
 ```text
-help version userspace uptime memory irq tasks pci block cache mounts ls cat write echo clear
+help version userspace uptime memory irq tasks pci block cache fat32 mounts ls cat write echo clear
 ```
 
 ## Build and verify
@@ -98,14 +111,15 @@ docs/               Requirements, architecture, ADRs, testing, security, process
 
 ## Current boundary
 
-M6C and FH3 remain single-core and PIT-driven. Block completion is synchronous
+M6D and FH3 remain single-core and PIT-driven. Block completion is synchronous
 and polling, one request is outstanding at a time, and only the explicitly
 identified disposable QEMU disk is used. The cache cannot issue writes and
-cannot contain dirty entries. RAMFS remains the only writable filesystem. The
-combined EFI-stub kernel still retains a bounded identity mapping while a
-separate high-half kernel image is designed. Read-only FAT32, persistent
-writes, physical-disk installation, graphics, SMP, and local APIC timers remain
-later gates.
+cannot contain dirty entries. RAMFS is the writable root and FAT32 is mounted
+read-only at `/disk`. The combined EFI-stub kernel still retains a bounded
+identity mapping while a separate high-half kernel image is designed.
+Process-facing persistent file syscalls, executable loading from FAT32,
+persistent writes, physical-disk installation, graphics, SMP, and local APIC
+timers remain later gates.
 
 ## Safety
 

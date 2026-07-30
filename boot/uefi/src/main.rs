@@ -15,6 +15,7 @@ use sanju_kernel::boot_info::{
 };
 use sanju_kernel::cache::{BlockCache, CacheError, DEFAULT_CACHE_ENTRIES, DirtyStatePolicy};
 use sanju_kernel::elf::load_position_independent;
+use sanju_kernel::fat32::Fat32;
 use sanju_kernel::fs::RamFs;
 use sanju_kernel::heap::KernelHeap;
 #[cfg(not(feature = "qemu-test"))]
@@ -31,14 +32,15 @@ use sanju_kernel::scheduler::{Scheduler, TaskKind};
 use sanju_kernel::shell::{Shell, ShellEnvironment};
 use sanju_kernel::startup::{self, StartupStage};
 use sanju_kernel::vfs::{
-    HandleRights, MAX_PATH_COMPONENTS, NodeKind, NormalizedPath, PathError, Vfs, VfsError,
+    FileSystem, HandleRights, MAX_PATH_COMPONENTS, NodeKind, NormalizedPath, PathError, Vfs,
+    VfsError,
 };
 use sanju_kernel::{
     BootInfo, Console, FoundationHardeningPhase2Report, FoundationHardeningPhase3Report,
-    FoundationHardeningReport, M5Report, M6aReport, M6bReport, M6cReport, MemoryMapInfo,
+    FoundationHardeningReport, M5Report, M6aReport, M6bReport, M6cReport, M6dReport, MemoryMapInfo,
     kernel_main_foundation_hardening, kernel_main_foundation_hardening_phase2,
     kernel_main_foundation_hardening_phase3, kernel_main_m5, kernel_main_m6a, kernel_main_m6b,
-    kernel_main_m6c,
+    kernel_main_m6c, kernel_main_m6d,
 };
 
 type EfiHandle = *mut c_void;
@@ -1304,6 +1306,13 @@ extern "efiapi" fn sanju_m5_kernel_entry() -> ! {
         vfs_mounts: vfs.mounts().len(),
         vfs_handle_capacity: vfs.handles().capacity(),
         vfs_path_normalization_passed: false,
+        fat32_mounted: false,
+        fat32_total_sectors: 0,
+        fat32_cluster_count: 0,
+        fat32_sectors_per_cluster: 0,
+        fat32_persistent_read_passed: false,
+        fat32_long_name_passed: false,
+        fat32_multicluster_read_passed: false,
     };
     for byte in b"version\nuserspace\n" {
         shell.feed_byte(*byte, &mut null_console, &mut vfs, &self_test_environment);
@@ -1628,6 +1637,110 @@ extern "efiapi" fn sanju_m5_kernel_entry() -> ! {
         );
     }
 
+    let fat32 = match Fat32::mount(block_cache) {
+        Ok(filesystem) => filesystem,
+        Err(_) => boot_failure(
+            &mut console,
+            "M6D-FAT32-001",
+            "FAT32 geometry or metadata validation failed",
+        ),
+    };
+    let fat32_info = fat32.mount_info();
+    let mut vfs = match vfs.mount("/disk", fat32) {
+        Ok(mounted) => mounted,
+        Err(_) => boot_failure(
+            &mut console,
+            "M6D-VFS-001",
+            "FAT32 VFS mount dispatch initialization failed",
+        ),
+    };
+
+    let mut root_has_readme = false;
+    let mut root_has_docs = false;
+    let mut root_has_long_name = false;
+    let root_directory_read_passed = vfs
+        .visit_directory("/disk", &mut |name, inode| {
+            root_has_readme |=
+                name.eq_ignore_ascii_case("README.TXT") && inode.kind == NodeKind::File;
+            root_has_docs |= name.eq_ignore_ascii_case("DOCS") && inode.kind == NodeKind::Directory;
+            root_has_long_name |= name == "Getting-Started.txt" && inode.kind == NodeKind::File;
+        })
+        .is_ok()
+        && root_has_readme
+        && root_has_docs
+        && root_has_long_name;
+
+    let mut persistent_data = [0_u8; 96];
+    let persistent_file_read_passed =
+        read_vfs_file(&mut vfs, "/disk/README.TXT", &mut persistent_data).is_ok_and(|read| {
+            read <= persistent_data.len()
+                && persistent_data[..read]
+                    .starts_with(b"Welcome to Soma OS persistent FAT32 storage.")
+        });
+
+    let mut long_name_data = [0_u8; 96];
+    let long_filename_read_passed =
+        read_vfs_file(&mut vfs, "/disk/Getting-Started.txt", &mut long_name_data).is_ok_and(
+            |read| {
+                read <= long_name_data.len()
+                    && long_name_data[..read].starts_with(b"Soma OS long filename support")
+            },
+        );
+
+    let nested_directory_read_passed = vfs
+        .resolve("/disk/docs/GUIDE.TXT")
+        .is_ok_and(|inode| inode.kind == NodeKind::File && inode.size == 900);
+    let mut multicluster_data = [0_u8; 1_024];
+    let multicluster_read_passed =
+        read_vfs_file(&mut vfs, "/disk/docs/GUIDE.TXT", &mut multicluster_data).is_ok_and(|read| {
+            read == 900
+                && multicluster_data.starts_with(b"Soma OS M6D multi-cluster guide.")
+                && multicluster_data[512..read]
+                    .windows(16)
+                    .any(|window| window == b"0123456789abcdef")
+        });
+    let read_only_enforced = vfs.open("/disk/README.TXT", HandleRights::ReadWrite)
+        == Err(VfsError::ReadOnly)
+        && vfs.create_or_replace("/disk/new.txt", b"blocked") == Err(VfsError::ReadOnly);
+    let m6d_vfs_mounts = vfs.mounts().len();
+    let vfs_mount_dispatch_active = m6d_vfs_mounts == 2
+        && vfs
+            .resolve("/disk")
+            .is_ok_and(|inode| inode.kind == NodeKind::Directory);
+    let fat_cache_stats = vfs
+        .secondary_backend()
+        .map(|filesystem| filesystem.inspect_device(BlockCache::stats))
+        .unwrap_or_default();
+
+    let m6d_report = M6dReport {
+        fat32_mount_active: true,
+        bytes_per_sector: fat32_info.bytes_per_sector,
+        sectors_per_cluster: fat32_info.sectors_per_cluster,
+        total_sectors: fat32_info.total_sectors,
+        cluster_count: fat32_info.cluster_count,
+        fs_info_valid: fat32_info.fs_info_valid,
+        backup_boot_valid: fat32_info.backup_boot_valid,
+        vfs_mount_dispatch_active,
+        mounted_filesystems: m6d_vfs_mounts,
+        root_directory_read_passed,
+        persistent_file_read_passed,
+        long_filename_read_passed,
+        nested_directory_read_passed,
+        multicluster_read_passed,
+        read_only_enforced,
+        cache_backed_reads: fat_cache_stats.device_reads,
+        dirty_cache_entries: fat_cache_stats.dirty_entries,
+        m6c_regression_passed: m6c_report.gate_passed(),
+    };
+    kernel_main_m6d(&mut console, m6d_report);
+    if !m6d_report.gate_passed() {
+        boot_failure(
+            &mut console,
+            "M6D-GATE-001",
+            "read-only FAT32 persistent-read acceptance gate failed",
+        );
+    }
+
     startup::print_stage(&mut console, StartupStage::Shell, true);
     Shell::start(&mut console);
 
@@ -1651,17 +1764,28 @@ extern "efiapi" fn sanju_m5_kernel_entry() -> ! {
             block_read_test_passed: m6b_report.known_sector_read_passed,
             block_write_test_passed: m6b_report.disposable_sector_write_readback_passed,
             cache_capacity: m6c_report.cache_capacity_entries,
-            cache_hits: cache_stats.hits,
-            cache_misses: cache_stats.misses,
-            cache_device_reads: cache_stats.device_reads,
-            cache_dirty_entries: cache_stats.dirty_entries,
+            cache_hits: fat_cache_stats.hits,
+            cache_misses: fat_cache_stats.misses,
+            cache_device_reads: fat_cache_stats.device_reads,
+            cache_dirty_entries: fat_cache_stats.dirty_entries,
             cache_read_only_policy: m6c_report.read_only_dirty_policy_active,
-            vfs_mounts,
+            vfs_mounts: m6d_vfs_mounts,
             vfs_handle_capacity,
             vfs_path_normalization_passed: path_normalization_passed,
+            fat32_mounted: m6d_report.fat32_mount_active,
+            fat32_total_sectors: fat32_info.total_sectors,
+            fat32_cluster_count: fat32_info.cluster_count,
+            fat32_sectors_per_cluster: fat32_info.sectors_per_cluster,
+            fat32_persistent_read_passed: persistent_file_read_passed,
+            fat32_long_name_passed: long_filename_read_passed,
+            fat32_multicluster_read_passed: multicluster_read_passed,
         };
-        let smoke_commands =
-            b"help\nuserspace\npci\nblock\ncache\nmounts\nls\ncat welcome.txt\ntasks\nuptime\n";
+        let smoke_commands = concat!(
+            "help\nuserspace\npci\nblock\ncache\nfat32\nmounts\n",
+            "ls\ncat welcome.txt\nls /disk\ncat /disk/README.TXT\n",
+            "ls /disk/docs\ntasks\nuptime\n",
+        )
+        .as_bytes();
         for byte in smoke_commands {
             shell.feed_byte(*byte, &mut console, &mut vfs, &environment);
         }
@@ -1700,14 +1824,21 @@ extern "efiapi" fn sanju_m5_kernel_entry() -> ! {
                         block_read_test_passed: m6b_report.known_sector_read_passed,
                         block_write_test_passed: m6b_report.disposable_sector_write_readback_passed,
                         cache_capacity: m6c_report.cache_capacity_entries,
-                        cache_hits: cache_stats.hits,
-                        cache_misses: cache_stats.misses,
-                        cache_device_reads: cache_stats.device_reads,
-                        cache_dirty_entries: cache_stats.dirty_entries,
+                        cache_hits: fat_cache_stats.hits,
+                        cache_misses: fat_cache_stats.misses,
+                        cache_device_reads: fat_cache_stats.device_reads,
+                        cache_dirty_entries: fat_cache_stats.dirty_entries,
                         cache_read_only_policy: m6c_report.read_only_dirty_policy_active,
-                        vfs_mounts,
+                        vfs_mounts: m6d_vfs_mounts,
                         vfs_handle_capacity,
                         vfs_path_normalization_passed: path_normalization_passed,
+                        fat32_mounted: m6d_report.fat32_mount_active,
+                        fat32_total_sectors: fat32_info.total_sectors,
+                        fat32_cluster_count: fat32_info.cluster_count,
+                        fat32_sectors_per_cluster: fat32_info.sectors_per_cluster,
+                        fat32_persistent_read_passed: persistent_file_read_passed,
+                        fat32_long_name_passed: long_filename_read_passed,
+                        fat32_multicluster_read_passed: multicluster_read_passed,
                     };
                     shell.feed_byte(byte, &mut console, &mut vfs, &environment);
                 }
@@ -1715,6 +1846,20 @@ extern "efiapi" fn sanju_m5_kernel_entry() -> ! {
 
             cpu::halt_until_interrupt();
         }
+    }
+}
+
+fn read_vfs_file<R: FileSystem, M: FileSystem>(
+    vfs: &mut Vfs<R, M>,
+    path: &str,
+    destination: &mut [u8],
+) -> Result<usize, VfsError> {
+    let handle = vfs.open(path, HandleRights::ReadOnly)?;
+    let read_result = vfs.read(handle, destination);
+    let close_result = vfs.close(handle);
+    match (read_result, close_result) {
+        (Ok(read), Ok(())) => Ok(read),
+        (Err(error), _) | (_, Err(error)) => Err(error),
     }
 }
 
