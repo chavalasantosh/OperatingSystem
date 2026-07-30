@@ -682,6 +682,23 @@ unsafe extern "efiapi" {
 /// is abandoned permanently.
 pub unsafe fn switch_to_kernel_stack(entry: extern "efiapi" fn() -> !) -> ! {
     let stack_top = kernel_stack_top();
+    let stack_base = unsafe { addr_of_mut!(KERNEL_STACK.0).cast::<u8>().addr() as u64 };
+    
+    let current_rsp: u64;
+    unsafe { asm!("mov {}, rsp", out(reg) current_rsp) };
+    
+    qemu::debug_write_line("[ASM-A] Before RSP switch");
+    qemu::debug_write_label_hex("Current RSP: ", current_rsp);
+    qemu::debug_write_label_hex("Kernel stack base: ", stack_base);
+    qemu::debug_write_label_hex("Kernel stack top: ", stack_top as u64);
+    
+    // Plant a bottom canary
+    unsafe {
+        let canary_ptr = stack_base as *mut u64;
+        canary_ptr.write_volatile(0xDEAD_BEEF_CAFE_BABE);
+        // Fill the rest with a pattern for high-water mark, up to stack_top - 32
+        core::ptr::write_bytes((stack_base + 8) as *mut u8, 0xA5, KERNEL_STACK_SIZE - 40);
+    }
 
     // SAFETY: The stack is statically reserved and 16-byte aligned. The 32-byte
     // home area satisfies the x86-64 UEFI calling convention before the call.
@@ -689,9 +706,29 @@ pub unsafe fn switch_to_kernel_stack(entry: extern "efiapi" fn() -> !) -> ! {
         asm!(
             "cli",
             "mov rsp, {stack_top}",
+            "mov dx, 0xe9",
+            "mov al, 91", "out dx, al", // '['
+            "mov al, 65", "out dx, al", // 'A'
+            "mov al, 83", "out dx, al", // 'S'
+            "mov al, 77", "out dx, al", // 'M'
+            "mov al, 45", "out dx, al", // '-'
+            "mov al, 66", "out dx, al", // 'B'
+            "mov al, 93", "out dx, al", // ']'
+            "mov al, 13", "out dx, al", // '\r'
+            "mov al, 10", "out dx, al", // '\n'
             "and rsp, -16",
             "sub rsp, 32",
             "xor rbp, rbp",
+            "mov dx, 0xe9",
+            "mov al, 91", "out dx, al", // '['
+            "mov al, 65", "out dx, al", // 'A'
+            "mov al, 83", "out dx, al", // 'S'
+            "mov al, 77", "out dx, al", // 'M'
+            "mov al, 45", "out dx, al", // '-'
+            "mov al, 67", "out dx, al", // 'C'
+            "mov al, 93", "out dx, al", // ']'
+            "mov al, 13", "out dx, al", // '\r'
+            "mov al, 10", "out dx, al", // '\n'
             "call {entry}",
             "ud2",
             stack_top = in(reg) stack_top,
@@ -1751,11 +1788,12 @@ fn debug_byte(byte: u8) {
 
 #[cfg(feature = "qemu-test")]
 fn qemu_exit_failure() -> ! {
-    // SAFETY: The smoke-test machine maps `isa-debug-exit` at port 0xF4.
-    unsafe {
-        outl(0x00f4, 0x11);
-    }
-    halt()
+    qemu::exit_failure()
+}
+
+#[cfg(feature = "qemu-test")]
+fn qemu_exit_boot_failure() -> ! {
+    qemu::exit_boot_failure()
 }
 
 fn halt() -> ! {

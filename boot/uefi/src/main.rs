@@ -515,15 +515,28 @@ extern "efiapi" fn efi_main(
 #[allow(clippy::too_many_lines)]
 #[unsafe(no_mangle)]
 extern "efiapi" fn sanju_m5_kernel_entry() -> ! {
+    cpu::qemu::debug_write_line("[RUST-A] Rust entry reached");
+    
+    cpu::qemu::debug_write_line("[RUST-B] Before BootInfo read");
     // SAFETY: `efi_main` initializes the slot exactly once before switching to
     // this stack and no other execution context can access it during M5 boot.
     let boot_info = unsafe { addr_of!(BOOT_INFO_SLOT).cast::<BootInfo>().read() };
+    cpu::qemu::debug_write_line("[RUST-C] After BootInfo read");
+    
+    cpu::qemu::debug_write_line("[RUST-D] Before console initialization");
     let mut console = KernelConsole::initialize();
+    cpu::qemu::debug_write_line("[RUST-E] Console initialized");
+    
+    cpu::qemu::debug_write_line("[RUST-F] Before Physical memory line");
     startup::print_stage(&mut console, StartupStage::Memory, true);
+    cpu::qemu::debug_write_line("[RUST-G] After Physical memory line");
 
     // SAFETY: Firmware has exited, execution is on the dedicated kernel stack,
     // and the bootstrap path is still single-core with interrupts disabled.
+    cpu::qemu::debug_write_line("[RUST-H] Before cpu::initialize");
     let cpu_report = unsafe { cpu::initialize() };
+    cpu::qemu::debug_write_line("[RUST-I] After cpu::initialize");
+    
     startup::print_stage(&mut console, StartupStage::Cpu, cpu_report.idt_active);
 
     if !boot_info.is_compatible() {
@@ -1866,7 +1879,7 @@ fn read_vfs_file<R: FileSystem, M: FileSystem>(
 fn boot_failure(console: &mut dyn Console, code: &str, message: &str) -> ! {
     startup::print_failure(console, code, message);
     #[cfg(feature = "qemu-test")]
-    cpu::qemu::exit_failure();
+    cpu::qemu::exit_boot_failure();
 
     #[cfg(not(feature = "qemu-test"))]
     cpu::halt_forever()

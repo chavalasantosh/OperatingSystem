@@ -39,6 +39,8 @@ timeout 20s qemu-system-x86_64 \
   -display none \
   -serial none \
   -monitor none \
+  -d int,cpu_reset,guest_errors \
+  -D build/qemu-events.log \
   -debugcon file:build/qemu-debug.log \
   -global isa-debugcon.iobase=0xe9 \
   -device isa-debug-exit,iobase=0xf4,iosize=0x04 \
@@ -51,6 +53,7 @@ set -e
 if [[ "$qemu_status" -ne 33 ]]; then
   echo "error: QEMU exited with status $qemu_status" >&2
   [[ -f build/qemu-debug.log ]] && cat build/qemu-debug.log >&2
+  [[ -f build/qemu-events.log ]] && cat build/qemu-events.log >&2
   exit 1
 fi
 
