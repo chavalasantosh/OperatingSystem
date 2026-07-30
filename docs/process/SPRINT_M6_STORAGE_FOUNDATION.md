@@ -47,7 +47,7 @@ Exit criteria:
 
 ## M6C — buffer cache and VFS
 
-Status: implementation candidate; QEMU acceptance required.
+Status: accepted as `v0.0.11-m6c`.
 
 - [x] 16-sector, allocation-free, read-through LRU block cache;
 - [x] hard read-only dirty-state policy that rejects writes before transport;
@@ -59,7 +59,7 @@ Status: implementation candidate; QEMU acceptance required.
 - [x] RAMFS adapted behind the VFS contract;
 - [x] live virtio first-miss/repeat-hit cache probe;
 - [x] `cache` and `mounts` shell diagnostics;
-- [ ] pass the pinned-toolchain headless QEMU smoke gate.
+- [x] pass the pinned-toolchain headless QEMU smoke gate.
 
 Exit criteria:
 
@@ -74,12 +74,26 @@ Exit criteria:
 
 ## M6D — read-only FAT32
 
-- validate BPB geometry and FAT bounds;
-- mount the dedicated second disk read-only;
-- support root-directory listing and bounded file reads;
-- reject malformed chains, loops, invalid clusters, and unsupported layouts;
-- expose mounted files through `ls` and `cat`;
-- prove a seeded file survives a fresh QEMU boot.
+Status: implementation candidate; QEMU acceptance required.
+
+- [x] validate BPB geometry, FAT capacity, FSInfo, backup boot, and device bounds;
+- [x] mount the dedicated second disk read-only at `/disk`;
+- [x] support root and nested directory listing;
+- [x] support offset and multi-cluster file reads;
+- [x] decode FAT 8.3 and bounded checksum-validated long filenames;
+- [x] reject malformed chains, loops, invalid clusters, and unsupported layouts;
+- [x] enforce read-only VFS and zero-dirty cache state;
+- [x] expose mounted files through path-aware `ls` and streaming `cat`;
+- [x] generate a deterministic FAT32 fixture for every QEMU run;
+- [ ] pass the pinned-toolchain headless QEMU smoke gate.
+
+Exit criteria:
+
+- the deterministic persistent files survive a fresh boot;
+- root, nested, long-name, offset, and multi-cluster reads pass;
+- malformed chains fail without unbounded traversal;
+- persistent writes are rejected before the transport;
+- M6C and every earlier regression gate remain passed.
 
 ## Deferred beyond M6D
 

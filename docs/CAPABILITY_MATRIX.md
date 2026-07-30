@@ -1,6 +1,6 @@
 # Soma OS Capability Matrix
 
-Registry version: **6**
+Registry version: **7**
 
 This file is generated from `capabilities/capabilities.toml`. Do not edit it manually.
 
@@ -35,4 +35,4 @@ This file is generated from `capabilities/capabilities.toml`. Do not edit it man
 | `STOR-CACHE-001` | Bounded read-only block cache | `verified` | `m6c` | `kernel/src/cache.rs`<br>`boot/uefi/src/main.rs`<br>`scripts/smoke-test.sh` |
 | `VFS-CORE-001` | VFS inode, mount, path, and handle contracts | `verified` | `m6c` | `kernel/src/vfs.rs`<br>`kernel/src/fs.rs`<br>`boot/uefi/src/main.rs`<br>`scripts/smoke-test.sh` |
 | `VFS-HANDLE-001` | Generation-protected bounded user file handles | `verified` | `m6c` | `kernel/src/vfs.rs`<br>`boot/uefi/src/main.rs`<br>`scripts/smoke-test.sh` |
-| `FS-FAT32-001` | Read-only FAT32 persistent filesystem | `planned` | `m6d` | `docs/process/SPRINT_M6_STORAGE_FOUNDATION.md` |
+| `FS-FAT32-001` | Read-only FAT32 persistent filesystem | `hardware_active` | `m6d` | `kernel/src/fat32.rs`<br>`kernel/src/vfs.rs`<br>`boot/uefi/src/main.rs`<br>`scripts/create-fat32-image.py`<br>`scripts/smoke-test.sh`<br>`docs/testing/M6D_FAT32_VALIDATION.md` |

@@ -23,3 +23,4 @@ M6B block transport gate: passed
 Fixed-capacity block cache: active
 VFS contracts: active
 Generation-protected user handle table: active
+M6D read-only FAT32 gate: passed

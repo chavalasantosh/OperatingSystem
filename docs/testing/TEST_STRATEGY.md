@@ -23,6 +23,11 @@
 - live first-miss/repeat-hit cache evidence with one underlying device read;
 - explicit write rejection and zero-dirty-entry evidence for M6C;
 - bounded path, mount-prefix, RAMFS adapter, handle-capacity, and stale-handle tests;
+- deterministic FAT32 BPB, FSInfo, backup boot, directory, long-name, and
+  multi-cluster fixtures;
+- malformed FAT-chain, cyclic-chain, offset-read, secondary-mount, and
+  persistent write-rejection tests;
+- QEMU root, nested, long-name, multi-cluster, and streaming shell read evidence;
 - every previously accepted milestone rerun as a regression gate.
 
 ## Future gates

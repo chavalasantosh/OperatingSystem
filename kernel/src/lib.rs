@@ -6,6 +6,7 @@ pub mod boot_info;
 pub mod cache;
 pub mod capabilities;
 pub mod elf;
+pub mod fat32;
 pub mod fs;
 pub mod generated;
 pub mod heap;
@@ -1115,6 +1116,139 @@ pub fn kernel_main_m6c(console: &mut dyn Console, report: M6cReport) {
     }
 }
 
+/// Runtime evidence for the M6D read-only FAT32 gate.
+#[allow(clippy::struct_excessive_bools)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct M6dReport {
+    pub fat32_mount_active: bool,
+    pub bytes_per_sector: u16,
+    pub sectors_per_cluster: u8,
+    pub total_sectors: u32,
+    pub cluster_count: u32,
+    pub fs_info_valid: bool,
+    pub backup_boot_valid: bool,
+    pub vfs_mount_dispatch_active: bool,
+    pub mounted_filesystems: usize,
+    pub root_directory_read_passed: bool,
+    pub persistent_file_read_passed: bool,
+    pub long_filename_read_passed: bool,
+    pub nested_directory_read_passed: bool,
+    pub multicluster_read_passed: bool,
+    pub read_only_enforced: bool,
+    pub cache_backed_reads: u64,
+    pub dirty_cache_entries: usize,
+    pub m6c_regression_passed: bool,
+}
+
+impl M6dReport {
+    #[must_use]
+    pub const fn gate_passed(self) -> bool {
+        self.fat32_mount_active
+            && self.bytes_per_sector == 512
+            && self.sectors_per_cluster > 0
+            && self.total_sectors > 0
+            && self.cluster_count >= 65_525
+            && self.fs_info_valid
+            && self.backup_boot_valid
+            && self.vfs_mount_dispatch_active
+            && self.mounted_filesystems == 2
+            && self.root_directory_read_passed
+            && self.persistent_file_read_passed
+            && self.long_filename_read_passed
+            && self.nested_directory_read_passed
+            && self.multicluster_read_passed
+            && self.read_only_enforced
+            && self.cache_backed_reads > 0
+            && self.dirty_cache_entries == 0
+            && self.m6c_regression_passed
+    }
+}
+
+/// Prints the M6D FAT32 and persistent-read acceptance report.
+pub fn kernel_main_m6d(console: &mut dyn Console, report: M6dReport) {
+    console.write_line("");
+    console.write_line("Soma OS M6D Read-Only FAT32");
+    write_state(console, "Validated FAT32 mount", report.fat32_mount_active);
+    console.write_str("FAT32 bytes per sector: ");
+    console.write_u64(u64::from(report.bytes_per_sector));
+    console.write_line("");
+    console.write_str("FAT32 sectors per cluster: ");
+    console.write_u64(u64::from(report.sectors_per_cluster));
+    console.write_line("");
+    console.write_str("FAT32 total sectors: ");
+    console.write_u64(u64::from(report.total_sectors));
+    console.write_line("");
+    console.write_str("FAT32 data clusters: ");
+    console.write_u64(u64::from(report.cluster_count));
+    console.write_line("");
+    console.write_line(if report.fs_info_valid {
+        "FAT32 FSInfo validation: passed"
+    } else {
+        "FAT32 FSInfo validation: failed"
+    });
+    console.write_line(if report.backup_boot_valid {
+        "FAT32 backup boot validation: passed"
+    } else {
+        "FAT32 backup boot validation: failed"
+    });
+    write_state(
+        console,
+        "Secondary VFS mount dispatch",
+        report.vfs_mount_dispatch_active,
+    );
+    console.write_str("Mounted filesystems under M6D: ");
+    console.write_usize(report.mounted_filesystems);
+    console.write_line("");
+    console.write_line(if report.root_directory_read_passed {
+        "Persistent root directory test: passed"
+    } else {
+        "Persistent root directory test: failed"
+    });
+    console.write_line(if report.persistent_file_read_passed {
+        "Persistent file read test: passed"
+    } else {
+        "Persistent file read test: failed"
+    });
+    console.write_line(if report.long_filename_read_passed {
+        "FAT32 long-filename test: passed"
+    } else {
+        "FAT32 long-filename test: failed"
+    });
+    console.write_line(if report.nested_directory_read_passed {
+        "Nested directory traversal test: passed"
+    } else {
+        "Nested directory traversal test: failed"
+    });
+    console.write_line(if report.multicluster_read_passed {
+        "Multi-cluster file read test: passed"
+    } else {
+        "Multi-cluster file read test: failed"
+    });
+    console.write_line(if report.read_only_enforced {
+        "FAT32 persistent writes: blocked"
+    } else {
+        "FAT32 persistent writes: unsafe"
+    });
+    console.write_str("Cache-backed FAT32 device reads: ");
+    console.write_u64(report.cache_backed_reads);
+    console.write_line("");
+    console.write_str("Dirty cache entries after FAT32 reads: ");
+    console.write_usize(report.dirty_cache_entries);
+    console.write_line("");
+    console.write_line(if report.m6c_regression_passed {
+        "M6C regression under M6D: passed"
+    } else {
+        "M6C regression under M6D: failed"
+    });
+    if report.gate_passed() {
+        console.write_line("M6D read-only FAT32 gate: passed");
+        console
+            .write_line("Next gate: process-facing persistent file syscalls and executable reads");
+    } else {
+        console.write_line("M6D read-only FAT32 gate: failed");
+    }
+}
+
 fn write_hex_u64(console: &mut dyn Console, value: u64) {
     for shift in (0..16).rev() {
         let nibble = u8::try_from((value >> (shift * 4)) & 0x0f).unwrap_or(0);
@@ -1139,10 +1273,10 @@ fn write_state(console: &mut dyn Console, label: &str, active: bool) {
 mod tests {
     use super::{
         BootInfo, Console, FoundationHardeningPhase2Report, FoundationHardeningPhase3Report,
-        FoundationHardeningReport, M4Report, M5Report, M6aReport, M6bReport, M6cReport,
+        FoundationHardeningReport, M4Report, M5Report, M6aReport, M6bReport, M6cReport, M6dReport,
         MemoryMapInfo, kernel_main, kernel_main_foundation_hardening,
         kernel_main_foundation_hardening_phase2, kernel_main_foundation_hardening_phase3,
-        kernel_main_m5, kernel_main_m6a, kernel_main_m6b, kernel_main_m6c,
+        kernel_main_m5, kernel_main_m6a, kernel_main_m6b, kernel_main_m6c, kernel_main_m6d,
     };
     use std::string::String;
 
@@ -1480,6 +1614,51 @@ mod tests {
             console
                 .output
                 .contains("M6C cache and VFS gate: passed\r\n")
+        );
+    }
+
+    #[test]
+    fn m6d_banner_requires_validated_persistent_reads_and_zero_dirty_state() {
+        let mut console = RecordingConsole::default();
+        let report = M6dReport {
+            fat32_mount_active: true,
+            bytes_per_sector: 512,
+            sectors_per_cluster: 1,
+            total_sectors: 131_072,
+            cluster_count: 129_022,
+            fs_info_valid: true,
+            backup_boot_valid: true,
+            vfs_mount_dispatch_active: true,
+            mounted_filesystems: 2,
+            root_directory_read_passed: true,
+            persistent_file_read_passed: true,
+            long_filename_read_passed: true,
+            nested_directory_read_passed: true,
+            multicluster_read_passed: true,
+            read_only_enforced: true,
+            cache_backed_reads: 12,
+            dirty_cache_entries: 0,
+            m6c_regression_passed: true,
+        };
+        kernel_main_m6d(&mut console, report);
+        assert!(report.gate_passed());
+        assert!(
+            !M6dReport {
+                dirty_cache_entries: 1,
+                ..report
+            }
+            .gate_passed()
+        );
+        assert!(console.output.contains("Soma OS M6D Read-Only FAT32\r\n"));
+        assert!(
+            console
+                .output
+                .contains("FAT32 long-filename test: passed\r\n")
+        );
+        assert!(
+            console
+                .output
+                .contains("M6D read-only FAT32 gate: passed\r\n")
         );
     }
 

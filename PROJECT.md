@@ -6,9 +6,9 @@
 - Architecture: x86-64
 - Firmware: UEFI 2.x
 - Primary language: Rust 2024
-- Accepted checkpoint: M6B Virtio Block Transport
-- Immutable release: `v0.0.10-m6b`
-- Current development checkpoint: M6C bounded cache and VFS
+- Accepted checkpoint: M6C Bounded Cache and VFS
+- Immutable release: `v0.0.11-m6c`
+- Current development checkpoint: M6D read-only FAT32
 - Deployment policy: QEMU only until physical-install safety gates pass
 
 ## Mission
@@ -21,12 +21,11 @@ Development is grouped into major milestone batches. Small formatting or CI corr
 
 ## Current objective
 
-Add an allocation-free, fixed-capacity read-through cache over the accepted
-virtio block transport. Establish bounded inode, superblock, mount, canonical
-path, directory, and generation-protected user file-handle contracts. Adapt
-RAMFS behind that VFS boundary without enabling persistent writes.
+Validate and mount a deterministic FAT32 volume over the accepted cache and
+virtio block stack. Expose bounded persistent directory and file reads through
+the VFS and shell while preserving an enforceable zero-dirty-data boundary.
 
 ## Next major objective
 
-Validate and mount a dedicated FAT32 image read-only, then expose bounded
-persistent directory listing and file reads through the accepted VFS.
+Add process-facing persistent file syscalls and executable reads without
+weakening path, handle, address-space, or read-only storage isolation.

@@ -22,9 +22,7 @@ OVMF_VARS_COPY="$(mktemp /tmp/sanjuos-ovmf-vars.XXXXXX.fd)"
 STORAGE_IMAGE="$(mktemp /tmp/sanjuos-storage.XXXXXX.img)"
 trap 'rm -f "$OVMF_VARS_COPY" "$STORAGE_IMAGE"' EXIT
 cp "$OVMF_VARS_TEMPLATE" "$OVMF_VARS_COPY"
-truncate -s 8M "$STORAGE_IMAGE"
-printf '%s' 'SANJUOS-M6B-READ-PATTERN' |
-  dd of="$STORAGE_IMAGE" bs=1 seek=$((8 * 512)) conv=notrunc status=none
+python3 ./scripts/create-fat32-image.py "$STORAGE_IMAGE"
 mkdir -p build
 rm -f build/qemu-debug.log
 
@@ -41,6 +39,8 @@ timeout 20s qemu-system-x86_64 \
   -display none \
   -serial none \
   -monitor none \
+  -d int,cpu_reset,guest_errors \
+  -D build/qemu-events.log \
   -debugcon file:build/qemu-debug.log \
   -global isa-debugcon.iobase=0xe9 \
   -device isa-debug-exit,iobase=0xf4,iosize=0x04 \
@@ -53,6 +53,7 @@ set -e
 if [[ "$qemu_status" -ne 33 ]]; then
   echo "error: QEMU exited with status $qemu_status" >&2
   [[ -f build/qemu-debug.log ]] && cat build/qemu-debug.log >&2
+  [[ -f build/qemu-events.log ]] && cat build/qemu-events.log >&2
   exit 1
 fi
 
@@ -130,14 +131,40 @@ grep -Fq "Stale file-handle rejection test: passed" build/qemu-debug.log
 grep -Fq "Persistent storage writes: disabled" build/qemu-debug.log
 grep -Fq "M6B regression under M6C: passed" build/qemu-debug.log
 grep -Fq "M6C cache and VFS gate: passed" build/qemu-debug.log
+grep -Fq "Soma OS M6D Read-Only FAT32" build/qemu-debug.log
+grep -Fq "Validated FAT32 mount: active" build/qemu-debug.log
+grep -Fq "FAT32 bytes per sector: 512" build/qemu-debug.log
+grep -Fq "FAT32 sectors per cluster: 1" build/qemu-debug.log
+grep -Fq "FAT32 total sectors: 131072" build/qemu-debug.log
+grep -Fq "FAT32 data clusters: 129022" build/qemu-debug.log
+grep -Fq "FAT32 FSInfo validation: passed" build/qemu-debug.log
+grep -Fq "FAT32 backup boot validation: passed" build/qemu-debug.log
+grep -Fq "Secondary VFS mount dispatch: active" build/qemu-debug.log
+grep -Fq "Mounted filesystems under M6D: 2" build/qemu-debug.log
+grep -Fq "Persistent root directory test: passed" build/qemu-debug.log
+grep -Fq "Persistent file read test: passed" build/qemu-debug.log
+grep -Fq "FAT32 long-filename test: passed" build/qemu-debug.log
+grep -Fq "Nested directory traversal test: passed" build/qemu-debug.log
+grep -Fq "Multi-cluster file read test: passed" build/qemu-debug.log
+grep -Fq "FAT32 persistent writes: blocked" build/qemu-debug.log
+grep -Fq "Dirty cache entries after FAT32 reads: 0" build/qemu-debug.log
+grep -Fq "M6C regression under M6D: passed" build/qemu-debug.log
+grep -Fq "M6D read-only FAT32 gate: passed" build/qemu-debug.log
 grep -Fq "Soma OS kernel shell ready." build/qemu-debug.log
 grep -Fq "M5 protected userspace, syscalls, and ELF loader are active." build/qemu-debug.log
 grep -Fq "virtio-blk targets: 1" build/qemu-debug.log
 grep -Fq "write/readback passed" build/qemu-debug.log
-grep -Fq "Block cache: 16 sectors, hits 1, misses 1, device reads 1, dirty 0, policy read-only" build/qemu-debug.log
-grep -Fq "VFS mounts: 1, handle capacity: 32, normalized paths: active" build/qemu-debug.log
+grep -Fq "Block cache: 16 sectors, hits " build/qemu-debug.log
+grep -Fq "dirty 0, policy read-only" build/qemu-debug.log
+grep -Fq "FAT32: 131072 sectors, 129022 clusters, 1 sector/cluster, persistent read passed, long names passed, multi-cluster passed" build/qemu-debug.log
+grep -Fq "VFS mounts: 2, handle capacity: 32, normalized paths: active" build/qemu-debug.log
 grep -Fq "/ ramfs read-write" build/qemu-debug.log
+grep -Fq "/disk fat32 read-only" build/qemu-debug.log
 grep -Fq "Welcome to Soma OS." build/qemu-debug.log
+grep -Fq "README.TXT" build/qemu-debug.log
+grep -Fq "Getting-Started.txt" build/qemu-debug.log
+grep -Fq "GUIDE.TXT" build/qemu-debug.log
+grep -Fq "Welcome to Soma OS persistent FAT32 storage." build/qemu-debug.log
 
 echo "QEMU smoke test passed."
 cat build/qemu-debug.log

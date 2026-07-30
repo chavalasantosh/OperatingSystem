@@ -6,7 +6,7 @@ use core::str;
 
 use crate::Console;
 use crate::fs::{MAX_FILE_BYTES, RamFs};
-use crate::vfs::{HandleRights, MAX_PATH_BYTES, Vfs, VfsError};
+use crate::vfs::{FileSystem, HandleRights, MAX_PATH_BYTES, Vfs, VfsError};
 
 const COMMAND_BUFFER_BYTES: usize = 128;
 
@@ -37,6 +37,13 @@ pub struct ShellEnvironment {
     pub vfs_mounts: usize,
     pub vfs_handle_capacity: usize,
     pub vfs_path_normalization_passed: bool,
+    pub fat32_mounted: bool,
+    pub fat32_total_sectors: u32,
+    pub fat32_cluster_count: u32,
+    pub fat32_sectors_per_cluster: u8,
+    pub fat32_persistent_read_passed: bool,
+    pub fat32_long_name_passed: bool,
+    pub fat32_multicluster_read_passed: bool,
 }
 
 /// Interactive line editor and command dispatcher.
@@ -66,11 +73,11 @@ impl Shell {
     }
 
     /// Processes one decoded ASCII byte.
-    pub fn feed_byte(
+    pub fn feed_byte<M: FileSystem>(
         &mut self,
         byte: u8,
         console: &mut dyn Console,
-        vfs: &mut Vfs<RamFs>,
+        vfs: &mut Vfs<RamFs, M>,
         environment: &ShellEnvironment,
     ) {
         match byte {
@@ -126,10 +133,10 @@ impl Default for Shell {
 }
 
 #[allow(clippy::too_many_lines)]
-fn execute_line(
+fn execute_line<M: FileSystem>(
     line: &str,
     console: &mut dyn Console,
-    vfs: &mut Vfs<RamFs>,
+    vfs: &mut Vfs<RamFs, M>,
     environment: &ShellEnvironment,
 ) {
     let mut parts = line.split_whitespace();
@@ -140,11 +147,11 @@ fn execute_line(
     match command {
         "help" => {
             console.write_line(concat!(
-                "Commands: help version uptime memory irq tasks pci block cache mounts ls cat ",
-                "write echo clear userspace",
+                "Commands: help version uptime memory irq tasks pci block cache fat32 mounts ls ",
+                "cat write echo clear userspace",
             ));
         }
-        "version" => console.write_line("Soma OS 0.0.11-prealpha (M6C)"),
+        "version" => console.write_line("Soma OS 0.0.12-prealpha (M6D)"),
         "uptime" => {
             console.write_str("Timer ticks: ");
             console.write_u64(environment.timer_ticks);
@@ -241,16 +248,55 @@ fn execute_line(
                 });
             });
         }
+        "fat32" => {
+            if !environment.fat32_mounted {
+                console.write_line("FAT32: not mounted");
+                return;
+            }
+            console.write_str("FAT32: ");
+            console.write_u64(u64::from(environment.fat32_total_sectors));
+            console.write_str(" sectors, ");
+            console.write_u64(u64::from(environment.fat32_cluster_count));
+            console.write_str(" clusters, ");
+            console.write_u64(u64::from(environment.fat32_sectors_per_cluster));
+            console.write_str(" sector/cluster, persistent read ");
+            console.write_str(if environment.fat32_persistent_read_passed {
+                "passed"
+            } else {
+                "failed"
+            });
+            console.write_str(", long names ");
+            console.write_str(if environment.fat32_long_name_passed {
+                "passed"
+            } else {
+                "failed"
+            });
+            console.write_str(", multi-cluster ");
+            console.write_line(if environment.fat32_multicluster_read_passed {
+                "passed"
+            } else {
+                "failed"
+            });
+        }
         "ls" => {
+            let input_path = parts.next().unwrap_or("/");
+            let mut path_storage = [0_u8; MAX_PATH_BYTES];
+            let Some(path) = shell_path(input_path, &mut path_storage) else {
+                console.write_line("invalid path");
+                return;
+            };
             let mut found = false;
-            let result = vfs.visit_directory("/", &mut |name, _inode| {
+            let result = vfs.visit_directory(path, &mut |name, _inode| {
                 found = true;
                 console.write_line(name);
             });
-            if result.is_err() {
-                console.write_line("filesystem error");
-            } else if !found {
-                console.write_line("<empty>");
+            match result {
+                Ok(()) if !found => console.write_line("<empty>"),
+                Ok(()) => {}
+                Err(VfsError::NotFound) => console.write_line("directory not found"),
+                Err(VfsError::NotDirectory) => console.write_line("not a directory"),
+                Err(VfsError::Path(_)) => console.write_line("invalid path"),
+                Err(_) => console.write_line("filesystem error"),
             }
         }
         "cat" => {
@@ -266,11 +312,29 @@ fn execute_line(
             match vfs.open(path, HandleRights::ReadOnly) {
                 Ok(handle) => {
                     let mut data = [0_u8; MAX_FILE_BYTES];
-                    let read_result = vfs.read(handle, &mut data);
+                    let mut last_byte = None;
+                    let mut read_failed = false;
+                    loop {
+                        match vfs.read(handle, &mut data) {
+                            Ok(0) => break,
+                            Ok(read) => {
+                                write_bytes_fragment(console, &data[..read]);
+                                last_byte = data[..read].last().copied();
+                            }
+                            Err(_) => {
+                                read_failed = true;
+                                break;
+                            }
+                        }
+                    }
                     let close_result = vfs.close(handle);
-                    match (read_result, close_result) {
-                        (Ok(read), Ok(())) => write_bytes(console, &data[..read]),
-                        _ => console.write_line("filesystem error"),
+                    if read_failed || close_result.is_err() {
+                        if last_byte.is_some_and(|byte| byte != b'\n') {
+                            console.write_line("");
+                        }
+                        console.write_line("filesystem error");
+                    } else if last_byte.is_some_and(|byte| byte != b'\n') {
+                        console.write_line("");
                     }
                 }
                 Err(VfsError::NotFound) => console.write_line("file not found"),
@@ -332,16 +396,13 @@ fn shell_path<'a>(input: &'a str, storage: &'a mut [u8; MAX_PATH_BYTES]) -> Opti
     str::from_utf8(&storage[..required]).ok()
 }
 
-fn write_bytes(console: &mut dyn Console, bytes: &[u8]) {
+fn write_bytes_fragment(console: &mut dyn Console, bytes: &[u8]) {
     for byte in bytes {
         if *byte == b'\n' {
             console.write_line("");
         } else if byte.is_ascii() {
             console.write_byte(*byte);
         }
-    }
-    if bytes.last().is_some_and(|byte| *byte != b'\n') {
-        console.write_line("");
     }
 }
 
@@ -350,7 +411,7 @@ mod tests {
     use super::{Shell, ShellEnvironment};
     use crate::Console;
     use crate::fs::RamFs;
-    use crate::vfs::Vfs;
+    use crate::vfs::{FileSystem, Inode, InodeId, NodeKind, Superblock, Vfs, VfsError};
     use std::string::String;
 
     #[derive(Default)]
@@ -409,5 +470,89 @@ mod tests {
         ));
         assert!(console.output.contains("/ ramfs read-write\r\n"));
         assert_eq!(shell.commands_executed(), 6);
+    }
+
+    struct LargeReadOnlyFile;
+
+    impl FileSystem for LargeReadOnlyFile {
+        fn superblock(&self) -> Superblock {
+            Superblock {
+                filesystem_name: "testfs",
+                root_inode: InodeId(1),
+                block_size: 512,
+                read_only: true,
+            }
+        }
+
+        fn lookup(&self, parent: InodeId, name: &str) -> Result<Inode, VfsError> {
+            if parent == InodeId(1) && name == "large.txt" {
+                return Ok(Inode {
+                    id: InodeId(2),
+                    kind: NodeKind::File,
+                    size: 720,
+                });
+            }
+            Err(VfsError::NotFound)
+        }
+
+        fn read(
+            &self,
+            inode: InodeId,
+            offset: u64,
+            destination: &mut [u8],
+        ) -> Result<usize, VfsError> {
+            if inode != InodeId(2) {
+                return Err(VfsError::NotFound);
+            }
+            let size = 720_usize;
+            let start = usize::try_from(offset).map_err(|_| VfsError::InvalidOffset)?;
+            if start >= size {
+                return Ok(0);
+            }
+            let read = destination.len().min(size - start);
+            destination[..read].fill(b'A');
+            const MARKER_OFFSET: usize = 700;
+            const MARKER: &[u8] = b"tail-marker";
+            for (index, byte) in destination[..read].iter_mut().enumerate() {
+                let absolute = start + index;
+                if (MARKER_OFFSET..MARKER_OFFSET + MARKER.len()).contains(&absolute) {
+                    *byte = MARKER[absolute - MARKER_OFFSET];
+                }
+            }
+            Ok(read)
+        }
+
+        fn create_or_replace(
+            &mut self,
+            _parent: InodeId,
+            _name: &str,
+            _data: &[u8],
+        ) -> Result<Inode, VfsError> {
+            Err(VfsError::ReadOnly)
+        }
+
+        fn visit_directory(
+            &self,
+            _inode: InodeId,
+            _visitor: &mut dyn FnMut(&str, Inode),
+        ) -> Result<(), VfsError> {
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn cat_streams_files_larger_than_one_shell_buffer() {
+        let mut shell = Shell::new();
+        let mut console = RecordingConsole::default();
+        let mut vfs = Vfs::new(RamFs::with_defaults())
+            .mount("/disk", LargeReadOnlyFile)
+            .unwrap();
+
+        for byte in b"cat /disk/large.txt\n" {
+            shell.feed_byte(*byte, &mut console, &mut vfs, &ShellEnvironment::default());
+        }
+
+        assert!(console.output.contains("tail-marker"));
+        assert_eq!(shell.commands_executed(), 1);
     }
 }

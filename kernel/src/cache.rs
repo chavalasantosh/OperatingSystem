@@ -232,6 +232,35 @@ impl<D: BlockDevice, const ENTRIES: usize> BlockCache<D, ENTRIES> {
     }
 }
 
+impl<D: BlockDevice, const ENTRIES: usize> BlockDevice for BlockCache<D, ENTRIES> {
+    fn geometry(&self) -> BlockGeometry {
+        BlockGeometry {
+            read_only: self.policy == DirtyStatePolicy::RejectWrites,
+            ..self.device.geometry()
+        }
+    }
+
+    fn read_sector(
+        &mut self,
+        sector: u64,
+        destination: &mut [u8; SECTOR_SIZE],
+    ) -> Result<(), BlockError> {
+        BlockCache::read_sector(self, sector, destination).map_err(cache_block_error)
+    }
+
+    fn write_sector(&mut self, sector: u64, source: &[u8; SECTOR_SIZE]) -> Result<(), BlockError> {
+        BlockCache::write_sector(self, sector, source).map_err(cache_block_error)
+    }
+}
+
+const fn cache_block_error(error: CacheError) -> BlockError {
+    match error {
+        CacheError::Block(error) => error,
+        CacheError::ReadOnlyPolicy => BlockError::ReadOnly,
+        CacheError::ZeroCapacity | CacheError::NoEvictableEntry => BlockError::Io,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::{BlockCache, CacheError, DirtyStatePolicy};

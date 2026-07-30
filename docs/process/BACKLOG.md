@@ -54,7 +54,7 @@
 - Block-device abstraction and polling virtio-blk transport.
 - Dedicated disk identity, known-sector read, and confined write/restore gate.
 
-## M6C — Bounded Cache and VFS — implementation ready for CI
+## M6C — Bounded Cache and VFS — accepted (`v0.0.11-m6c`)
 
 - Fixed-capacity read-through cache with a hard no-dirty-data policy.
 - VFS inode, superblock, mount, canonical path, and file-handle contracts.
@@ -63,8 +63,16 @@
 
 ## M6D — Read-Only Persistent Filesystem
 
-- Read-only FAT32 persistent filesystem prototype.
-- User VFS handles and executable spawning after the kernel VFS gate.
+- Validated read-only FAT32 on the dedicated virtio disk.
+- Persistent root, long-name, nested, offset, and multi-cluster reads.
+- Secondary VFS mount, shell access, and zero-dirty enforcement.
+
+## M6E — Process-Facing Persistent Reads
+
+- Extend the syscall/VFS boundary to persistent mount-aware file handles.
+- Copy persistent file data safely into private user address spaces.
+- Load signed/accepted ELF64 executables from read-only FAT32.
+- Preserve process, path, handle, and address-space isolation.
 
 ## Later major epics
 
